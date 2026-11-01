@@ -250,7 +250,7 @@ const leadQualification: Template = {
           },
         },
         {
-          id: "score",
+          id: "total",
           type: "assignment",
           label: "Total score",
           position: pos(2),
@@ -297,8 +297,8 @@ const leadQualification: Template = {
       ],
       edges: [
         { id: "e1", source: "start", target: "qualify" },
-        { id: "e2", source: "qualify", target: "score" },
-        { id: "e3", source: "score", target: "hot" },
+        { id: "e2", source: "qualify", target: "total" },
+        { id: "e3", source: "total", target: "hot" },
         { id: "e4", source: "hot", sourceHandle: "hot", target: "book" },
         { id: "e5", source: "hot", sourceHandle: "nurture", target: "nurture" },
         { id: "e6", source: "nurture", target: "reply" },

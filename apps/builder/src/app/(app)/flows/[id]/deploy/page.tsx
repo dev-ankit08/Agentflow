@@ -4,6 +4,7 @@ import { Alert, Badge, Button, Card, CardBody, CardHeader, Field, Input, PageHea
 import { ChannelsCard, type ChannelSummary } from "@/components/channels-card";
 import { CopyBlock, IdentitySecret } from "@/components/deploy-tools";
 import { Flash } from "@/components/flash";
+import { McpCard } from "@/components/mcp-card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { can, requireWorkspace } from "@/lib/context";
 import { rollbackVersion, saveWidget } from "../../../../actions";
@@ -57,12 +58,15 @@ export default async function DeployPage({
     if (error instanceof ApiError && error.status === 404) notFound();
     throw error;
   }
-  const [w, { versions }, { reviews }, { channels }, ab] = await Promise.all([
+  const [w, { versions }, { reviews }, { channels }, ab, mcp] = await Promise.all([
     apiFetch<Widget>(`/v1/flows/${id}/widget`, { workspaceId: current.id }),
     apiFetch<Versions>(`/v1/flows/${id}/versions`, { workspaceId: current.id }),
     apiFetch<{ reviews: Review[] }>(`/v1/flows/${id}/reviews`, { workspaceId: current.id }),
     apiFetch<{ channels: ChannelSummary[] }>(`/v1/channels?flowId=${id}`, { workspaceId: current.id }),
     apiFetch<AbTest>(`/v1/flows/${id}/ab-test`, { workspaceId: current.id }),
+    apiFetch<{ enabled: boolean; url: string; toolName: string; description: string | null }>(`/v1/flows/${id}/mcp`, {
+      workspaceId: current.id,
+    }),
   ]);
   const pendingReviews = reviews.filter((r) => r.status === "pending");
   const { error, ok } = await searchParams;
@@ -213,6 +217,8 @@ export default async function DeployPage({
           </Card>
 
           <ChannelsCard flowId={id} channels={channels} canManage={can(current, "admin")} live={Boolean(live)} />
+
+          <McpCard flowId={id} initial={mcp} canManage={can(current, "admin")} live={Boolean(live)} />
 
           <Card>
             <CardHeader

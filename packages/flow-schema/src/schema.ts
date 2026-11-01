@@ -58,6 +58,8 @@ export const AgentConfig = z.object({
   outputSchema: z.record(z.string(), z.unknown()).optional(),
   tools: z.array(z.string()).optional(),
   maxToolCalls: z.number().int().min(0).max(32).optional(),
+  /** false: never answer this agent from the workspace response cache. */
+  cache: z.boolean().optional(),
 });
 
 export const DecisionOutcome = z.object({

@@ -1,16 +1,27 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
 import type { Server } from "node:http";
-import { eq, like } from "drizzle-orm";
+import type { AddressInfo } from "node:net";
+import { and, eq, like } from "drizzle-orm";
 import { SignJWT } from "jose";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, flows, orgs, runs, users } from "@agentflow/db";
+import { WebSocket } from "ws";
+import { WebsocketProvider } from "y-websocket";
+import * as Y from "yjs";
+import { createDb, flows, orgs, runSteps, runs, users } from "@agentflow/db";
 import type { FlowInput } from "@agentflow/flow-schema";
+import { LLMGateway } from "@agentflow/llm-gateway";
 import { startMockLlm } from "@agentflow/llm-gateway/mock-server";
 import { createSecretStore } from "@agentflow/secret-store";
 import { buildApp } from "../src/app";
 import { TOKEN_AUDIENCE, TOKEN_ISSUER } from "../src/auth";
-import { applyRetention, chooseVersion, resumeDueTimers, runSchedules } from "../src/automation";
+import { COLLAB_AUDIENCE } from "../src/collab";
+import { applyRetention, chooseVersion, extractMemories, resumeDueTimers, runSchedules } from "../src/automation";
 import { loadRootEnv } from "../src/config";
+import { ROUTE_PERMISSIONS } from "../src/permissions";
+import { sendDueReports } from "../src/reports";
 import { clusterQuestions } from "../src/routes/governance";
 
 // End-to-end Phase 3 features over a real Postgres and the mock model. Skipped without DATABASE_URL.
@@ -52,6 +63,8 @@ describe.skipIf(!url)("Phase 3 API", () => {
   let llm: Server;
   let workspaceId = "";
   let orgId = "";
+  const mails: { to: string; subject: string; text: string }[] = [];
+  const slackPosts: { url: string; text: string }[] = [];
 
   const call = async (as: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: object) => {
     const token = await new SignJWT({})
@@ -101,6 +114,10 @@ describe.skipIf(!url)("Phase 3 API", () => {
       corsOrigin: "http://localhost:3100",
       allowPrivateHttp: true,
       sweepIntervalMs: 0,
+      notifier: {
+        sendMail: async (m) => void mails.push(m),
+        postSlack: async (url, body) => void slackPosts.push({ url, text: body.text }),
+      },
     });
     await db.insert(users).values([owner, builder]);
     const ws = (await call(owner.id, "POST", "/v1/orgs", { orgName: "Phase3" })).json();
@@ -156,6 +173,80 @@ describe.skipIf(!url)("Phase 3 API", () => {
     const triggers = (await call(owner.id, "GET", `/v1/flows/${flowId}/triggers`)).json();
     expect(triggers.webhook).toMatchObject({ signed: true });
     expect((await app.inject({ method: "POST", url: "/v1/hooks/hk_nope", payload: {} })).statusCode).toBe(404);
+  });
+
+  it("runs batches, files, HubSpot-signed events and inbound email", async () => {
+    const flowId = await makeFlow("Intake", ...echoFlow("Handled"));
+    await publish(flowId);
+    const post = (path: string, payload: string, headers: Record<string, string> = {}) =>
+      app.inject({ method: "POST", url: path, headers: { "content-type": "application/json", ...headers }, payload });
+
+    // Batch mode: a JSON array starts one run per item.
+    const created = (
+      await call(owner.id, "POST", `/v1/flows/${flowId}/webhook`, { signed: false, batch: true })
+    ).json();
+    const hook = new URL(created.url).pathname;
+    const batch = await post(`${hook}?wait=true`, JSON.stringify([{ order: "A1" }, { order: "A2" }, { order: "A3" }]));
+    expect(batch.json().runs.map((r: { output: { got: string } }) => r.output.got)).toEqual(["A1", "A2", "A3"]);
+
+    // A CSV file: one run per row in batch mode, or all rows in one run otherwise.
+    const csv = 'order,note\nB1,"needs ""gift"" wrap"\nB2,plain\n';
+    const rows = await post(`${hook}/file?wait=true`, csv, { "content-type": "text/csv", "x-filename": "orders.csv" });
+    expect(rows.json().runs).toHaveLength(2);
+    await call(owner.id, "PATCH", `/v1/flows/${flowId}/webhook`, { batch: false });
+    const single = await post(`${hook}/file?wait=true`, csv, { "content-type": "text/csv" });
+    const [run1] = await db.select().from(runs).where(eq(runs.id, single.json().runId));
+    expect((run1?.state as { trigger: { rows: unknown[] } }).trigger.rows).toEqual([
+      { order: "B1", note: 'needs "gift" wrap' },
+      { order: "B2", note: "plain" },
+    ]);
+
+    // HubSpot v3 signatures are checked with the app's client secret.
+    const hub = (
+      await call(owner.id, "POST", `/v1/flows/${flowId}/webhook`, {
+        signature: "hubspot",
+        secret: "hubspot-client-secret",
+      })
+    ).json();
+    const hubPath = new URL(hub.url).pathname;
+    const body = JSON.stringify([{ objectId: 42, subscriptionType: "deal.creation" }]);
+    const timestamp = String(Date.now());
+    const sign = (secret: string) =>
+      createHmac("sha256", secret)
+        .update(`POST${"http://localhost:4000"}${hubPath}${body}${timestamp}`)
+        .digest("base64");
+    const headers = { "x-hubspot-request-timestamp": timestamp };
+    expect((await post(hubPath, body, { ...headers, "x-hubspot-signature-v3": sign("wrong") })).statusCode).toBe(401);
+    expect(
+      (await post(hubPath, body, { ...headers, "x-hubspot-signature-v3": sign("hubspot-client-secret") })).statusCode,
+    ).toBe(202);
+
+    // Inbound email, as Postmark JSON or Mailgun form fields.
+    const email = (await call(owner.id, "POST", `/v1/flows/${flowId}/email-hook`)).json();
+    const emailPath = new URL(email.url).pathname;
+    const postmark = await post(
+      `${emailPath}?wait=true`,
+      JSON.stringify({ From: "ana@example.com", Subject: "Order help", TextBody: "Where is order 77?" }),
+    );
+    const [mailRun] = await db.select().from(runs).where(eq(runs.id, postmark.json().runId));
+    expect(mailRun?.triggerType).toBe("email");
+    expect((mailRun?.state as { trigger: Record<string, unknown> }).trigger).toMatchObject({
+      message: "Where is order 77?",
+      email: { from: "ana@example.com", subject: "Order help" },
+    });
+    const mailgun = await app.inject({
+      method: "POST",
+      url: emailPath,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        sender: "bo@example.com",
+        subject: "Hi",
+        "stripped-text": "Cancel please",
+      }).toString(),
+    });
+    expect(mailgun.statusCode).toBe(202);
+    const triggers = (await call(owner.id, "GET", `/v1/flows/${flowId}/triggers`)).json();
+    expect(triggers).toMatchObject({ webhook: { signature: "hubspot", batch: false }, email: { url: email.url } });
   });
 
   it("fires schedules once per matching minute", async () => {
@@ -255,6 +346,477 @@ describe.skipIf(!url)("Phase 3 API", () => {
     });
   });
 
+  it("learns facts from idle conversations in the background, once per new activity", async () => {
+    const flowId = await makeFlow("Remembering", ...echoFlow("Noted!"));
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    await publish(flowId);
+    const { secret } = (await call(owner.id, "POST", `/v1/flows/${flowId}/widget/identity-secret`)).json();
+    const identityToken = await new SignJWT({})
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(`mem_${run}`)
+      .sign(new TextEncoder().encode(secret));
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/widget/${widgetKey}/sessions`,
+      payload: { message: "Please only contact me by email", identityToken },
+    });
+    const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+
+    const saved = await call(owner.id, "PUT", "/v1/workspace/settings", {
+      memoryExtraction: {
+        enabled: true,
+        model: { provider: "openai_compatible", name: "fact-model" },
+        idleMinutes: 30,
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    // A stand-in model that always finds one fact.
+    const gateway = new LLMGateway({
+      resolveCredentials: async () => ({ apiKey: "k" }),
+      providers: {
+        openai_compatible: {
+          id: "openai_compatible",
+          chat: async () => ({
+            text: '{"facts":["Prefers to be contacted by email"]}',
+            toolCalls: [],
+            usage: { inputTokens: 1, outputTokens: 1 },
+            stopReason: "stop",
+          }),
+        },
+      },
+    });
+    const noBudgetLimit = async () => {};
+
+    // Not yet idle long enough.
+    await extractMemories(db, () => gateway, noBudgetLimit);
+    let [row] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(row?.memoryExtractedAt).toBeNull();
+
+    const later = new Date(Date.now() + 31 * 60_000);
+    await extractMemories(db, () => gateway, noBudgetLimit, later);
+    [row] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(row?.memoryExtractedAt).toBeTruthy();
+    const facts = (await call(owner.id, "GET", `/v1/end-users/mem_${run}`)).json().memories;
+    expect(facts.map((m: { fact: string }) => m.fact)).toEqual(["Prefers to be contacted by email"]);
+
+    // Already learned and no new activity: not processed again.
+    await extractMemories(db, () => gateway, noBudgetLimit, new Date(Date.now() + 62 * 60_000));
+    const [again] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(again?.memoryExtractedAt?.getTime()).toBe(row?.memoryExtractedAt?.getTime());
+    await call(owner.id, "PUT", "/v1/workspace/settings", { memoryExtraction: null });
+  });
+
+  it("notifies approvers by email and Slack, with signed links that decide on confirmation", async () => {
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      notifications: { emailApprovers: true, slackWebhookUrl: "https://hooks.slack.com/services/T0/B0/xyz" },
+    });
+    const flowId = await makeFlow(
+      "Approve me",
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "ok",
+          type: "approval",
+          label: "Check",
+          position: at,
+          config: { message: "Refund 40 for {{trigger.message}}" },
+        },
+        { id: "yes", type: "end", label: "Yes", position: at, config: { message: "Approved!" } },
+        { id: "no", type: "end", label: "No", position: at, config: { message: "Declined" } },
+      ],
+      [
+        { id: "1", source: "start", target: "ok" },
+        { id: "2", source: "ok", sourceHandle: "approved", target: "yes" },
+        { id: "3", source: "ok", sourceHandle: "rejected", target: "no" },
+        { id: "4", source: "ok", sourceHandle: "timeout", target: "no" },
+      ],
+    );
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    await publish(flowId);
+    mails.length = 0;
+    slackPosts.length = 0;
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/widget/${widgetKey}/sessions`,
+      payload: { message: "order 9" },
+    });
+    const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+    // Every member at or above the approver role (reviewer) is emailed: here the owner and the builder.
+    await expect.poll(() => mails.length).toBe(2);
+    expect(mails.map((m) => m.to).sort()).toEqual([builder.email, owner.email].sort());
+    const ownerMail = mails.find((m) => m.to === owner.email)!;
+    expect(ownerMail.subject).toBe("Approval needed: Approve me");
+    expect(ownerMail.text).toContain("Refund 40 for order 9");
+    expect(slackPosts[0]).toMatchObject({ url: "https://hooks.slack.com/services/T0/B0/xyz" });
+    expect(slackPosts[0]!.text).toContain("Refund 40 for order 9");
+
+    const approveLink = new URL(/Approve: (\S+)/.exec(ownerMail.text)![1]!);
+    const path = approveLink.pathname + approveLink.search;
+    // Opening the link only shows a confirmation page.
+    const confirm = await app.inject({ method: "GET", url: path });
+    expect(confirm.body).toContain("Approve this request?");
+    let [run] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(run?.status).toBe("waiting_approval");
+
+    // A tampered link is refused; the real one decides on POST.
+    const form = Object.fromEntries(approveLink.searchParams);
+    const tampered = await app.inject({
+      method: "POST",
+      url: approveLink.pathname,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ ...form, d: "reject" }).toString(),
+    });
+    expect(tampered.statusCode).toBe(403);
+    const decided = await app.inject({
+      method: "POST",
+      url: approveLink.pathname,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ ...form, note: "fine" }).toString(),
+    });
+    expect(decided.body).toContain("Approved");
+    [run] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(run?.status).toBe("waiting_input");
+    expect((await app.inject({ method: "GET", url: path })).body).toContain("Already decided");
+
+    // Slack can be removed while keeping email.
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      notifications: { emailApprovers: true, slackWebhookUrl: null },
+    });
+    const settings = (await call(owner.id, "GET", "/v1/workspace/settings")).json().settings;
+    expect(settings.notifications).toEqual({ emailApprovers: true });
+  });
+
+  it("imports and exports eval cases as CSV, and exports analytics as CSV", async () => {
+    const flowId = await makeFlow("CSV evals", ...echoFlow("Hi"));
+    const ds = (await call(owner.id, "POST", `/v1/flows/${flowId}/evals`, { name: "Imported" })).json();
+    // Excel-style file: byte-order mark, alias column names, quoted commas, a blank-input row.
+    const csv =
+      '﻿Question,Expected,Outcome\n"Where is order 12, please?",shipped,resolved\n,ignored,\nRefund?,,escalated\n';
+    const imported = await call(owner.id, "POST", `/v1/evals/${ds.id}/cases/import`, { csv });
+    expect(imported.statusCode).toBe(201);
+    expect(imported.json()).toEqual({ added: 2, skipped: 1 });
+    expect(
+      (await call(owner.id, "POST", `/v1/evals/${ds.id}/cases/import`, { csv: "foo,bar\n1,2\n" })).statusCode,
+    ).toBe(400);
+
+    const exported = await call(owner.id, "GET", `/v1/evals/${ds.id}/cases.csv`);
+    expect(exported.headers["content-type"]).toContain("text/csv");
+    expect(exported.body.split("\n")).toEqual([
+      "input,contains,outcome,rubric",
+      '"Where is order 12, please?",shipped,resolved,',
+      "Refund?,,escalated,",
+    ]);
+
+    const daily = await call(owner.id, "GET", "/v1/analytics?days=7&format=csv");
+    expect(daily.body.split("\n")[0]).toBe("day,conversations,automated,hours_saved,gross_savings_usd");
+    const byFlow = await call(owner.id, "GET", "/v1/analytics?days=7&format=csv&table=flows");
+    expect(byFlow.body.split("\n")[0]).toBe("flow,conversations,automated,escalated,automation_rate");
+  });
+
+  it("keeps a workspace prompt library", async () => {
+    const created = await call(builder.id, "POST", "/v1/prompts", {
+      name: "Friendly tone",
+      body: "Be warm and concise.{{#if user.name}} Greet {{user.name}}.{{/if}}",
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id;
+    expect(
+      (await call(builder.id, "POST", "/v1/prompts", { name: "Leaky", body: "Key {{secret.STRIPE}}" })).statusCode,
+    ).toBe(400);
+    expect((await call(builder.id, "POST", "/v1/prompts", { name: "Broken", body: "{{#if x}}open" })).statusCode).toBe(
+      400,
+    );
+
+    const edited = await call(builder.id, "PUT", `/v1/prompts/${id}`, {
+      name: "Friendly tone",
+      description: "Default support voice",
+      body: "Be warm.",
+    });
+    expect(edited.json()).toMatchObject({ body: "Be warm.", description: "Default support voice" });
+    const list = (await call(owner.id, "GET", "/v1/prompts")).json().prompts;
+    expect(list.map((p: { name: string }) => p.name)).toContain("Friendly tone");
+    expect((await call(builder.id, "DELETE", `/v1/prompts/${id}`)).statusCode).toBe(204);
+    expect((await call(builder.id, "PUT", `/v1/prompts/${id}`, { name: "x", body: "y" })).statusCode).toBe(404);
+  });
+
+  it("answers repeated and reworded questions from the response cache", async () => {
+    const flowId = await makeFlow(
+      "Cached FAQ",
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "faq",
+          type: "agent",
+          label: "FAQ",
+          position: at,
+          config: {
+            model: { provider: "openai_compatible", name: "mock-1" },
+            systemPrompt: "Answer store questions.",
+            userPrompt: "{{trigger.message}}",
+          },
+        },
+        { id: "end", type: "end", label: "End", position: at, config: { message: "{{faq.text}}" } },
+      ],
+      [
+        { id: "1", source: "start", target: "faq" },
+        { id: "2", source: "faq", target: "end" },
+      ],
+    );
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    await publish(flowId);
+    const ask = async (message: string) => {
+      const res = await app.inject({ method: "POST", url: `/v1/widget/${widgetKey}/sessions`, payload: { message } });
+      const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+      const [step] = await db
+        .select()
+        .from(runSteps)
+        .where(and(eq(runSteps.runId, runId), eq(runSteps.nodeId, "faq")));
+      return step!;
+    };
+
+    // Off by default.
+    await ask("Opening hours today?");
+    expect((await ask("Opening hours today?")).model).toBe("openai_compatible/mock-1");
+
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      cache: { enabled: true, ttlHours: 24, similar: true },
+      embedding: { provider: "openai_compatible", name: "mock-embed" },
+    });
+    expect((await ask("Opening hours today?")).model).toBe("openai_compatible/mock-1"); // stored
+    const exact = await ask("  opening HOURS today?");
+    expect(exact).toMatchObject({ model: "cache (openai_compatible/mock-1)", tokensIn: 0 });
+    const reworded = await ask("Today, opening hours?");
+    expect(reworded.model).toBe("cache (openai_compatible/mock-1)");
+    expect((await ask("Do you ship abroad?")).model).toBe("openai_compatible/mock-1");
+
+    const stats = (await call(owner.id, "GET", "/v1/workspace/settings")).json().cache;
+    expect(stats.hits).toBeGreaterThanOrEqual(2);
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      cache: { enabled: false, ttlHours: 24, similar: false },
+      embedding: null,
+    });
+  });
+
+  it("emails weekly ROI reports to admins once on the chosen day", async () => {
+    const monday9 = new Date("2026-11-02T09:15:00Z"); // a Monday
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      reports: { enabled: true, weekday: 1, hourUtc: 8, extraRecipients: ["ceo@example.com"] },
+    });
+    mails.length = 0;
+    const { notifier } = app.deps;
+    // Wrong day, then too early in the day: nothing is sent.
+    await sendDueReports(db, notifier, "http://localhost:3100", new Date("2026-11-03T09:15:00Z"));
+    await sendDueReports(db, notifier, "http://localhost:3100", new Date("2026-11-02T07:15:00Z"));
+    expect(mails.filter((m) => [owner.email, "ceo@example.com"].includes(m.to))).toHaveLength(0);
+
+    await sendDueReports(db, notifier, "http://localhost:3100", monday9);
+    const mine = mails.filter((m) => [owner.email, builder.email, "ceo@example.com"].includes(m.to));
+    // Owners/admins and extra recipients get it; builders don't.
+    expect(mine.map((m) => m.to).sort()).toEqual(["ceo@example.com", owner.email].sort());
+    expect(mine[0]!.subject).toMatch(/^Default weekly report: \d+ conversations/);
+    expect(mine[0]!.text).toContain("Hours saved");
+    expect(mine[0]!.text).toContain("http://localhost:3100/analytics?days=7");
+
+    // Once per day, even if the sweep runs again.
+    mails.length = 0;
+    await sendDueReports(db, notifier, "http://localhost:3100", new Date("2026-11-02T10:00:00Z"));
+    expect(mails.filter((m) => m.to === owner.email)).toHaveLength(0);
+
+    // "Send me a test report" goes to the caller only.
+    const test = await call(owner.id, "POST", "/v1/reports/send-test");
+    expect(test.json()).toMatchObject({ sent: 1 });
+    expect(mails.at(-1)?.to).toBe(owner.email);
+    expect((await call(builder.id, "POST", "/v1/reports/send-test")).statusCode).toBe(403);
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      reports: { enabled: false, weekday: 1, hourUtc: 8, extraRecipients: [] },
+    });
+  });
+
+  it("checks members with custom roles against the role's permissions", async () => {
+    const lead = await call(owner.id, "POST", "/v1/roles", {
+      name: "Support lead",
+      baseRole: "viewer",
+      permissions: ["inbox.decide", "flows.comment", "audit.view"],
+    });
+    expect(lead.statusCode).toBe(201);
+    expect(
+      (await call(owner.id, "POST", "/v1/roles", { name: "Support lead", baseRole: "viewer", permissions: [] }))
+        .statusCode,
+    ).toBe(409);
+    expect(
+      (await call(builder.id, "POST", "/v1/roles", { name: "X", baseRole: "viewer", permissions: [] })).statusCode,
+    ).toBe(403);
+
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: lead.json().id });
+    const members = (await call(owner.id, "GET", "/v1/members")).json().members;
+    expect(members.find((m: { userId: string }) => m.userId === builder.id)).toMatchObject({
+      role: "viewer",
+      customRole: "Support lead",
+    });
+    // Granted beyond the base role; denied where the role lacks the permission; base role elsewhere.
+    expect((await call(builder.id, "GET", "/v1/audit")).statusCode).toBe(200);
+    expect((await call(builder.id, "POST", "/v1/flows", { name: "Nope" })).statusCode).toBe(403);
+    expect((await call(builder.id, "GET", "/v1/flows")).statusCode).toBe(200);
+
+    // A builder who can't publish: built-in preset minus one permission.
+    const { presets } = (await call(owner.id, "GET", "/v1/roles")).json();
+    const noPublish = await call(owner.id, "POST", "/v1/roles", {
+      name: "Builder (no publish)",
+      baseRole: "builder",
+      permissions: presets.builder.filter((p: string) => p !== "flows.publish"),
+    });
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: noPublish.json().id });
+    const created = await call(builder.id, "POST", "/v1/flows", { name: "Draft only" });
+    expect(created.statusCode).toBe(201);
+    expect((await call(builder.id, "POST", `/v1/flows/${created.json().id}/publish`)).statusCode).toBe(403);
+
+    // Clearing the custom role keeps its base role as the built-in role.
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: null });
+    const [nodes, edges] = echoFlow("Hi");
+    await call(builder.id, "PUT", `/v1/flows/${created.json().id}/draft`, {
+      draft: { schemaVersion: 1, id: created.json().id, name: "Draft only", nodes, edges },
+    });
+    expect((await call(builder.id, "POST", `/v1/flows/${created.json().id}/publish`)).statusCode).toBe(201);
+    const roles = (await call(owner.id, "GET", "/v1/roles")).json().roles;
+    expect(roles.map((r: { name: string; members: number }) => [r.name, r.members])).toEqual([
+      ["Builder (no publish)", 0],
+      ["Support lead", 0],
+    ]);
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "builder" });
+  });
+
+  it("maps every protected write route to a permission", () => {
+    const routesDir = new URL("../src/routes/", import.meta.url);
+    const missing: string[] = [];
+    for (const file of readdirSync(routesDir)) {
+      const src = readFileSync(new URL(file, routesDir), "utf8");
+      const re =
+        /app\.(get|post|put|patch|delete)(?:<[^>]*>)?\(\s*"([^"]+)",\s*\{\s*preHandler:\s*auth\.requireWorkspace\("(\w+)"\)/g;
+      for (const m of src.matchAll(re)) {
+        const [, method, path, role] = m;
+        const key = `${method!.toUpperCase()} /v1${path}`;
+        if (method !== "get" && role !== "viewer" && !ROUTE_PERMISSIONS[key]) missing.push(key);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("shares a live document between editors and saves it to the draft", async () => {
+    const flowId = await makeFlow("Co-edit", ...echoFlow("Hello"));
+    if (!app.server.listening) await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as AddressInfo).port;
+    const token = (sub: string) =>
+      new SignJWT({})
+        .setProtectedHeader({ alg: "HS256" })
+        .setSubject(sub)
+        .setIssuer(TOKEN_ISSUER)
+        .setAudience(COLLAB_AUDIENCE)
+        .setExpirationTime("10m")
+        .sign(new TextEncoder().encode(jwtSecret));
+    const connect = async (sub: string) => {
+      const doc = new Y.Doc();
+      const provider = new WebsocketProvider(`ws://127.0.0.1:${port}/v1/collab`, flowId, doc, {
+        params: { token: await token(sub) },
+        WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
+        disableBc: true,
+      });
+      await new Promise<void>((resolve) => provider.once("sync", () => resolve()));
+      return { doc, provider, nodes: doc.getMap<{ id: string; label: string }>("nodes") };
+    };
+
+    const a = await connect(owner.id);
+    const b = await connect(builder.id);
+    expect([...a.nodes.keys()].sort()).toEqual(["end", "start"]);
+
+    // An edit in one editor appears in the other, and is saved to the draft shortly after.
+    a.nodes.set("end", { ...a.nodes.get("end")!, label: "Goodbye" });
+    await expect.poll(() => b.nodes.get("end")?.label).toBe("Goodbye");
+    await expect
+      .poll(async () => {
+        const [row] = await db.select({ draft: flows.draftJson }).from(flows).where(eq(flows.id, flowId));
+        return row?.draft.nodes.find((n) => n.id === "end")?.label;
+      })
+      .toBe("Goodbye");
+
+    // Reviewers can watch but their edits are ignored.
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "reviewer" });
+    b.provider.destroy();
+    const watcher = await connect(builder.id);
+    watcher.nodes.set("end", { ...watcher.nodes.get("end")!, label: "Hijacked" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(a.nodes.get("end")?.label).toBe("Goodbye");
+    watcher.provider.destroy();
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "builder" });
+
+    // A bad token is refused.
+    const closed = await new Promise<number>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/collab/${flowId}?token=nope`);
+      ws.on("close", (code) => resolve(code));
+    });
+    expect(closed).toBe(4401);
+    a.provider.destroy();
+  });
+
+  it("offers a published flow to other AI tools as an MCP server", async () => {
+    const flowId = await makeFlow("Order helper", ...echoFlow("Order 1042 has shipped."));
+    await publish(flowId);
+    if (!app.server.listening) await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as AddressInfo).port;
+
+    expect((await call(builder.id, "POST", `/v1/flows/${flowId}/mcp`, {})).statusCode).toBe(403);
+    const enabled = (
+      await call(owner.id, "POST", `/v1/flows/${flowId}/mcp`, { description: "Answers order questions" })
+    ).json();
+    expect(enabled).toMatchObject({ toolName: "order_helper" });
+    const url = `http://127.0.0.1:${port}/v1/mcp/${flowId}`;
+    const connect = async (token: string) => {
+      const client = new McpClient({ name: "test", version: "1.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(url), {
+          requestInit: { headers: { authorization: `Bearer ${token}` } },
+        }),
+      );
+      return client;
+    };
+
+    const client = await connect(enabled.token);
+    const { tools } = await client.listTools();
+    expect(tools).toMatchObject([{ name: "order_helper", description: "Answers order questions" }]);
+    const result = await client.callTool({ name: "order_helper", arguments: { message: "Where is order 1042?" } });
+    expect(result.isError).toBeFalsy();
+    expect((result.content as { text: string }[])[0]!.text).toContain("Order 1042 has shipped.");
+    await client.close();
+
+    // Wrong token, then a disabled server: refused.
+    await expect(connect("afm_wrong")).rejects.toThrow();
+    await call(owner.id, "DELETE", `/v1/flows/${flowId}/mcp`);
+    await expect(connect(enabled.token)).rejects.toThrow();
+    expect((await call(owner.id, "GET", `/v1/flows/${flowId}/mcp`)).json()).toMatchObject({ enabled: false });
+  });
+
+  it("drafts a flow from a description, reporting what still needs fixing", async () => {
+    const res = await call(builder.id, "POST", "/v1/flows/generate", {
+      description: "Answer shipping questions and hand refunds to a person",
+      model: { provider: "openai_compatible", name: "mock-1" },
+      name: "Generated support",
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    // The mock model can't design flows, so repairs run out and the draft comes back with its issues.
+    expect(body).toMatchObject({ name: "Generated support", attempts: 3 });
+    expect(body.issues.length).toBeGreaterThan(0);
+    const flow = (await call(builder.id, "GET", `/v1/flows/${body.id}`)).json();
+    expect(flow.draftJson.nodes.some((n: { type: string }) => n.type === "start")).toBe(true);
+    expect(
+      (
+        await call(builder.id, "POST", "/v1/flows/generate", {
+          description: "short",
+          model: { provider: "openai_compatible", name: "mock-1" },
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+
   it("records configuration changes in the audit log", async () => {
     await call(owner.id, "PUT", "/v1/workspace/settings", { retention: { days: 90 } });
     const log = (await call(owner.id, "GET", "/v1/audit")).json();
@@ -332,6 +894,41 @@ describe.skipIf(!url)("Phase 3 API", () => {
     const promoted = await call(owner.id, "POST", `/v1/flows/${flowId}/ab-test/promote`);
     expect(promoted.json()).toEqual({ liveVersionId: v2.id });
     expect((await call(owner.id, "GET", `/v1/flows/${flowId}/ab-test`)).json().abTest).toBeNull();
+  });
+
+  it("indexes knowledge with the embedding model and searches it semantically", async () => {
+    const before = (await call(owner.id, "GET", "/v1/knowledge/index")).json();
+    expect(before.model).toBeNull();
+
+    expect(
+      (
+        await call(owner.id, "PUT", "/v1/workspace/settings", {
+          embedding: { provider: "openai_compatible", name: "mock-embed" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const added = await call(owner.id, "POST", "/v1/knowledge", {
+      type: "text",
+      name: "Warranty",
+      content:
+        "Every backpack carries a lifetime warranty against manufacturing defects.\n\nTents are covered for two years.",
+    });
+    expect(added.statusCode).toBe(201);
+
+    // New passages are indexed straight away.
+    const status = (await call(owner.id, "GET", "/v1/knowledge/index")).json();
+    expect(status).toMatchObject({ model: { provider: "openai_compatible", name: "mock-embed" } });
+    expect(status.indexed).toBe(status.total);
+    expect(status.total).toBeGreaterThan(0);
+
+    const hits = (await call(owner.id, "POST", "/v1/knowledge/search", { query: "backpack warranty", topK: 2 })).json();
+    expect(hits.results[0].text).toContain("lifetime warranty");
+
+    // A model that can't embed falls back to full-text search instead of failing.
+    await call(owner.id, "PUT", "/v1/workspace/settings", { embedding: { provider: "openai", name: "no-key" } });
+    const fallback = (await call(owner.id, "POST", "/v1/knowledge/search", { query: "backpack warranty" })).json();
+    expect(fallback.results[0].text).toContain("lifetime warranty");
+    await call(owner.id, "PUT", "/v1/workspace/settings", { embedding: null });
   });
 
   it("supports presence, node comments and edit-conflict protection", async () => {

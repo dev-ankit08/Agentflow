@@ -130,21 +130,37 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
         title="Analytics"
         description="What your agents handled, and what that saved compared with people doing the same work."
         action={
-          <div className="flex gap-1 rounded-lg border border-border p-0.5" role="group" aria-label="Time range">
-            {RANGES.map((d) => (
-              <Link
-                key={d}
-                href={`/analytics?days=${d}`}
-                aria-current={d === days ? "true" : undefined}
-                className={
-                  d === days
-                    ? "rounded-md bg-accent-soft px-3 py-1 text-sm font-medium text-accent"
-                    : "rounded-md px-3 py-1 text-sm text-muted hover:text-text"
-                }
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-muted">
+              Export CSV:{" "}
+              <a href={`/api/v1/analytics?days=${days}&format=csv`} className="text-accent hover:underline" download>
+                by day
+              </a>{" "}
+              ·{" "}
+              <a
+                href={`/api/v1/analytics?days=${days}&format=csv&table=flows`}
+                className="text-accent hover:underline"
+                download
               >
-                {d}d
-              </Link>
-            ))}
+                by flow
+              </a>
+            </span>
+            <div className="flex gap-1 rounded-lg border border-border p-0.5" role="group" aria-label="Time range">
+              {RANGES.map((d) => (
+                <Link
+                  key={d}
+                  href={`/analytics?days=${d}`}
+                  aria-current={d === days ? "true" : undefined}
+                  className={
+                    d === days
+                      ? "rounded-md bg-accent-soft px-3 py-1 text-sm font-medium text-accent"
+                      : "rounded-md px-3 py-1 text-sm text-muted hover:text-text"
+                  }
+                >
+                  {d}d
+                </Link>
+              ))}
+            </div>
           </div>
         }
       />

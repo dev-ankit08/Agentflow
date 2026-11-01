@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import { and, eq, sql } from "drizzle-orm";
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { ZodError } from "zod";
-import { connectors, type Db } from "@agentflow/db";
+import { connectors, workspaces, type Db } from "@agentflow/db";
 import type { LLMGateway, Price } from "@agentflow/llm-gateway";
 import { McpConnectionPool } from "@agentflow/mcp-client";
 import { DbRunStore, InProcessExecutor, type RunExecutor, type RunStore } from "@agentflow/runtime";
@@ -29,9 +30,17 @@ import { inboxRoutes } from "./routes/inbox";
 import { knowledgeRoutes } from "./routes/knowledge";
 import { makeGatewayFor, makeGuardedFetch, makeToolsFor } from "./services";
 import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredApprovals } from "./workspace-services";
-import { applyRetention, resumeDueTimers, runSchedules } from "./automation";
+import { approvalLinkRoutes, defaultNotifier, notifyApprovers, type Notifier } from "./approvals";
+import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "./automation";
+import { purgeExpiredCache } from "./cache";
+import { collabRoutes } from "./collab";
+import { sendDueReports } from "./reports";
+import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
 import { auditHook, governanceRoutes } from "./routes/governance";
+import { promptRoutes } from "./routes/prompts";
+import { roleRoutes } from "./routes/roles";
+import { mcpServerRoutes } from "./routes/mcp-server";
 
 function widgetScriptPath(): string | null {
   let dir = process.cwd();
@@ -52,6 +61,8 @@ export type RuntimeConfig = {
   publicApiUrl: string;
   /** Tests: process channel messages before answering the webhook. */
   syncChannels: boolean;
+  /** Builder address, for links in emails. */
+  appUrl: string;
 };
 
 export type Deps = {
@@ -66,6 +77,7 @@ export type Deps = {
   channels: Channels;
   channelEndpoints: ChannelEndpoints;
   billing: Billing;
+  notifier: Notifier;
   config: RuntimeConfig;
 };
 
@@ -88,6 +100,13 @@ export type AppOptions = {
   /** Stripe billing; omitted when STRIPE_SECRET_KEY is not set. */
   stripe?: StripeConfig | null;
   logger?: FastifyServerOptions["logger"];
+  /** Builder address, for links in notifications. */
+  appUrl?: string;
+  /** SMTP URL for approval emails (EMAIL_SERVER); emails are skipped without it. */
+  emailServer?: string;
+  emailFrom?: string;
+  /** Replaces email/Slack delivery (tests). */
+  notifier?: Notifier;
 };
 
 declare module "fastify" {
@@ -103,10 +122,36 @@ export async function buildApp(opts: AppOptions) {
   const store = new DbRunStore(opts.db);
   const gatewayFor = makeGatewayFor(opts.db, opts.secrets, opts.prices ?? {});
   const toolsFor = makeToolsFor(opts.db, opts.secrets, pool);
+  const publicApiUrl = (opts.publicApiUrl ?? "http://localhost:4000").replace(/\/+$/, "");
+  const appUrl = (opts.appUrl ?? "http://localhost:3100").replace(/\/+$/, "");
+  const notifier =
+    opts.notifier ??
+    defaultNotifier(opts.emailServer, opts.emailFrom ?? "AgentFlow <no-reply@agentflow.local>", (msg) =>
+      app.log.info(msg),
+    );
+  // New approvals notify approvers by email and Slack, without holding up the conversation.
+  const onApprovalRequested = (approvalId: string) =>
+    void notifyApprovers(
+      {
+        db: opts.db,
+        secrets: opts.secrets,
+        notifier,
+        jwtSecret: opts.jwtSecret,
+        publicApiUrl,
+        appUrl,
+      },
+      approvalId,
+    ).catch((err) => app.log.warn({ err, approvalId }, "approval notification failed"));
   const fetchImpl = makeGuardedFetch(Boolean(opts.allowPrivateHttp));
   const executor =
     opts.executor ??
-    new InProcessExecutor({ store, gatewayFor, toolsFor, servicesFor: makeServicesFor(opts.db), fetch: fetchImpl });
+    new InProcessExecutor({
+      store,
+      gatewayFor,
+      toolsFor,
+      servicesFor: makeServicesFor(opts.db, gatewayFor, onApprovalRequested),
+      fetch: fetchImpl,
+    });
   // Eval runs: same flows, but write tools are simulated and nothing reaches the inbox.
   const toolMode = (workspaceId: string) => async (ref: string) => {
     const [connectorId, tool] = ref.split("/");
@@ -120,7 +165,7 @@ export async function buildApp(opts: AppOptions) {
     store,
     gatewayFor,
     toolsFor: (ws) => sandboxTools(toolsFor(ws), toolMode(ws)),
-    servicesFor: makeSandboxServicesFor(opts.db),
+    servicesFor: makeSandboxServicesFor(opts.db, gatewayFor),
     fetch: fetchImpl,
   });
   const billing = makeBilling(opts.db, opts.stripe ?? null);
@@ -146,16 +191,19 @@ export async function buildApp(opts: AppOptions) {
     channels,
     channelEndpoints,
     billing,
+    notifier,
     config: {
       API_JWT_SECRET: opts.jwtSecret,
       allowStdioMcp: Boolean(opts.allowStdioMcp),
       allowPrivateHttp: Boolean(opts.allowPrivateHttp),
-      publicApiUrl: (opts.publicApiUrl ?? "http://localhost:4000").replace(/\/+$/, ""),
+      publicApiUrl,
       syncChannels: Boolean(opts.syncChannels),
+      appUrl,
     },
   };
   app.decorate("deps", deps);
 
+  await app.register(websocket);
   // The builder origin gets credentialed CORS; widget endpoints accept any origin and check it per widget.
   await app.register(cors, {
     delegator: (req, cb) => {
@@ -170,10 +218,27 @@ export async function buildApp(opts: AppOptions) {
     await sweepExpiredApprovals(opts.db, executor).catch((err) => app.log.error({ err }, "approval sweep failed"));
     await resumeDueTimers(opts.db, executor).catch((err) => app.log.error({ err }, "timer sweep failed"));
     await runSchedules(opts.db, executor).catch((err) => app.log.error({ err }, "schedule sweep failed"));
+    const services = makeServicesFor(opts.db, gatewayFor, onApprovalRequested);
+    await extractMemories(opts.db, gatewayFor, async (ws) => services(ws).checkBudget?.()).catch((err) =>
+      app.log.error({ err }, "memory extraction failed"),
+    );
+    // Knowledge added or re-synced since the last sweep, or a new embedding model, gets indexed in the background.
+    const embedding = await opts.db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(sql`${workspaces.settings} ? 'embedding'`)
+      .catch(() => []);
+    for (const ws of embedding) {
+      await indexKnowledge(opts.db, gatewayFor(ws.id), ws.id).catch((err) =>
+        app.log.warn({ err, workspaceId: ws.id }, "knowledge indexing failed"),
+      );
+    }
     if (Date.now() - lastRetention > 3_600_000) {
       lastRetention = Date.now();
       await applyRetention(opts.db).catch((err) => app.log.error({ err }, "retention sweep failed"));
+      await purgeExpiredCache(opts.db).catch((err) => app.log.error({ err }, "cache purge failed"));
     }
+    await sendDueReports(opts.db, notifier, appUrl).catch((err) => app.log.error({ err }, "weekly reports failed"));
   };
   const sweeper = opts.sweepIntervalMs === 0 ? null : setInterval(() => void sweep(), opts.sweepIntervalMs ?? 20_000);
   sweeper?.unref();
@@ -232,8 +297,13 @@ export async function buildApp(opts: AppOptions) {
       await v1.register((s) => channelRoutes(s, deps));
       await v1.register((s) => billingRoutes(s, deps));
       await v1.register((s) => governanceRoutes(s, deps));
+      await v1.register((s) => promptRoutes(s, deps));
+      await v1.register((s) => roleRoutes(s, deps));
+      await v1.register((s) => mcpServerRoutes(s, deps));
+      await v1.register((s) => collabRoutes(s, { db: opts.db, jwtSecret: opts.jwtSecret }));
       await v1.register((s) => automationRoutes(s, deps));
       await v1.register((s) => hookRoutes(s, deps));
+      await v1.register((s) => approvalLinkRoutes(s, { ...deps, jwtSecret: opts.jwtSecret }));
     },
     { prefix: "/v1" },
   );

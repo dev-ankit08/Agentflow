@@ -1,19 +1,11 @@
 import { createHash } from "node:crypto";
-import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
-import {
-  approvals,
-  chunks,
-  documents,
-  flowVersions,
-  flows,
-  handoffs,
-  runSteps,
-  runs,
-  workspaces,
-  type Db,
-} from "@agentflow/db";
+import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { approvals, flowVersions, flows, handoffs, runSteps, runs, workspaces, type Db } from "@agentflow/db";
 import { Flow, validateFlow } from "@agentflow/flow-schema";
-import type { KnowledgeChunk, RunExecutor, RuntimeServices, ToolProvider } from "@agentflow/runtime";
+import type { LLMGateway } from "@agentflow/llm-gateway";
+import type { RunExecutor, RuntimeServices, ToolProvider } from "@agentflow/runtime";
+import { cacheService } from "./cache";
+import { searchKnowledge } from "./semantic";
 import { memoryService } from "./automation";
 
 const monthStart = () => {
@@ -38,38 +30,6 @@ export async function monthUsage(db: Db, workspaceId: string) {
   return { usd: Number(cost?.usd ?? 0), tokens: Number(tokens?.n ?? 0) };
 }
 
-/**
- * Full-text retrieval over the workspace's knowledge. Query words are OR-ed (after stemming and
- * stop-word removal) and ranked by cover density, so natural questions still find passages.
- */
-export async function searchKnowledge(
-  db: Db,
-  workspaceId: string,
-  query: string,
-  opts: { sources: string[]; topK: number },
-) {
-  const tsq = sql`to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', ${query})), ' | '))`;
-  const rows = await db
-    .select({
-      text: chunks.content,
-      title: documents.title,
-      uri: documents.uri,
-      score: sql<number>`ts_rank_cd(${chunks.tsv}, ${tsq})`,
-    })
-    .from(chunks)
-    .innerJoin(documents, eq(documents.id, chunks.documentId))
-    .where(
-      and(
-        eq(chunks.workspaceId, workspaceId),
-        sql`${chunks.tsv} @@ ${tsq}`,
-        opts.sources.length ? inArray(documents.sourceId, opts.sources) : undefined,
-      ),
-    )
-    .orderBy(sql`ts_rank_cd(${chunks.tsv}, ${tsq}) desc`)
-    .limit(opts.topK);
-  return rows.map((r) => ({ ...r, score: Number(r.score) })) satisfies KnowledgeChunk[];
-}
-
 export async function loadWorkspaceFlow(db: Db, workspaceId: string, flowId: string, useDraft: boolean) {
   const [flow] = await db
     .select()
@@ -87,15 +47,21 @@ export async function loadWorkspaceFlow(db: Db, workspaceId: string, flowId: str
 }
 
 /** Services for live runs: real inbox items, knowledge, budgets. */
-export function makeServicesFor(db: Db) {
+export function makeServicesFor(
+  db: Db,
+  gatewayFor: (workspaceId: string) => LLMGateway,
+  onApprovalRequested?: (approvalId: string) => void,
+) {
   return (workspaceId: string): RuntimeServices => ({
-    knowledge: { search: (q, o) => searchKnowledge(db, workspaceId, q, o) },
+    knowledge: { search: (q, o) => searchKnowledge(db, workspaceId, q, o, gatewayFor(workspaceId)) },
+    cache: cacheService(db, gatewayFor(workspaceId), workspaceId),
     approvals: {
       async request(input) {
         const [row] = await db
           .insert(approvals)
           .values({ workspaceId, ...input })
           .returning({ id: approvals.id });
+        onApprovalRequested?.(row!.id);
         return row!.id;
       },
     },
@@ -129,11 +95,13 @@ export function makeServicesFor(db: Db) {
 }
 
 /** Services for eval runs: nothing reaches the inbox, and write tools are not executed. */
-export function makeSandboxServicesFor(db: Db) {
-  const live = makeServicesFor(db);
+export function makeSandboxServicesFor(db: Db, gatewayFor: (workspaceId: string) => LLMGateway) {
+  const live = makeServicesFor(db, gatewayFor);
   return (workspaceId: string): RuntimeServices => ({
     ...live(workspaceId),
     memory: { read: memoryService(db, workspaceId).read, write: async () => {} },
+    // Evals test the draft itself, so they never reuse cached answers.
+    cache: undefined,
     approvals: { request: async () => "sandbox" },
     handoffs: { create: async () => "sandbox" },
     checkBudget: async () => {},

@@ -71,3 +71,156 @@ export async function promoteAbTest(form: FormData) {
     "The challenger is now the live version",
   );
 }
+
+export async function saveEmbedding(form: FormData) {
+  const provider = field(form, "provider");
+  const name = field(form, "name");
+  await attempt(
+    "/settings",
+    () => call("/v1/workspace/settings", "PUT", { embedding: provider && name ? { provider, name } : null }),
+    provider && name ? "Embedding model saved; your knowledge is being indexed" : "Semantic search turned off",
+  );
+}
+
+export async function indexKnowledgeNow() {
+  await attempt("/settings", () => call("/v1/knowledge/index", "POST"), "Knowledge indexed");
+}
+
+export async function saveMemoryExtraction(form: FormData) {
+  const enabled = form.get("enabled") === "on";
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        memoryExtraction: {
+          enabled,
+          model: { provider: field(form, "provider"), name: field(form, "model") },
+          idleMinutes: Number(field(form, "idleMinutes")) || 30,
+        },
+      }),
+    enabled ? "Customers' conversations will be remembered" : "Background memory turned off",
+  );
+}
+
+export async function saveNotifications(form: FormData) {
+  const url = field(form, "slackWebhookUrl");
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        notifications: {
+          emailApprovers: form.get("emailApprovers") === "on",
+          // Empty keeps the saved webhook; "Remove" clears it.
+          ...(form.get("removeSlack") === "on" ? { slackWebhookUrl: null } : url ? { slackWebhookUrl: url } : {}),
+        },
+      }),
+    "Approval notifications saved",
+  );
+}
+
+export async function importEvalCases(form: FormData) {
+  const flowId = field(form, "flowId");
+  const file = form.get("file");
+  const csv = file instanceof File ? await file.text() : "";
+  let summary = "";
+  await attempt(`/flows/${flowId}/evals`, async () => {
+    if (!csv.trim()) throw new ApiError(400, "Choose a CSV file to import");
+    const res = await call(`/v1/evals/${field(form, "datasetId")}/cases/import`, "POST", { csv });
+    const { added, skipped } = res as { added: number; skipped: number };
+    summary = `Imported ${added} case${added === 1 ? "" : "s"}${skipped ? ` (${skipped} rows without an input skipped)` : ""}`;
+  });
+  redirect(`/flows/${flowId}/evals?ok=${encodeURIComponent(summary)}`);
+}
+
+export async function savePrompt(form: FormData) {
+  const id = field(form, "id");
+  const body = {
+    name: field(form, "name"),
+    description: field(form, "description") || undefined,
+    body: String(form.get("body") ?? ""),
+  };
+  await attempt(
+    "/prompts",
+    () => (id ? call(`/v1/prompts/${id}`, "PUT", body) : call("/v1/prompts", "POST", body)),
+    id ? "Prompt saved" : "Prompt added to the library",
+  );
+}
+
+export async function deletePrompt(form: FormData) {
+  await attempt("/prompts", () => call(`/v1/prompts/${field(form, "id")}`, "DELETE"), "Prompt deleted");
+}
+
+export async function saveCache(form: FormData) {
+  const enabled = form.get("enabled") === "on";
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        cache: {
+          enabled,
+          ttlHours: Number(field(form, "ttlHours")) || 24,
+          similar: form.get("similar") === "on",
+        },
+      }),
+    enabled ? "Response cache on" : "Response cache off",
+  );
+}
+
+export async function saveReports(form: FormData) {
+  const enabled = form.get("enabled") === "on";
+  const extraRecipients = field(form, "extraRecipients")
+    .split(/[,;\s]+/)
+    .map((e) => e.trim())
+    .filter(Boolean);
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        reports: {
+          enabled,
+          weekday: Number(field(form, "weekday")),
+          hourUtc: Number(field(form, "hourUtc")),
+          extraRecipients,
+        },
+      }),
+    enabled ? "Weekly report scheduled" : "Weekly report turned off",
+  );
+}
+
+export async function sendTestReport() {
+  await attempt("/settings", () => call("/v1/reports/send-test", "POST"), "Test report sent to your email");
+}
+
+export async function saveRole(form: FormData) {
+  const id = field(form, "id");
+  const body = {
+    name: field(form, "name"),
+    baseRole: field(form, "baseRole"),
+    permissions: form.getAll("permissions").map(String),
+  };
+  await attempt(
+    "/settings",
+    () => (id ? call(`/v1/roles/${id}`, "PUT", body) : call("/v1/roles", "POST", body)),
+    id ? "Role saved" : "Role created",
+  );
+}
+
+export async function deleteRole(form: FormData) {
+  await attempt("/settings", () => call(`/v1/roles/${field(form, "id")}`, "DELETE"), "Role deleted");
+}
+
+export async function generateFlowFromDescription(form: FormData) {
+  let id = "";
+  let issues = 0;
+  await attempt("/flows", async () => {
+    const res = (await call("/v1/flows/generate", "POST", {
+      description: field(form, "description"),
+      model: { provider: field(form, "provider"), name: field(form, "model") },
+      name: field(form, "name") || undefined,
+    })) as { id: string; issues: unknown[] };
+    id = res.id;
+    issues = res.issues.length;
+  });
+  // Open the draft; the editor's issues panel lists anything the model couldn't get right.
+  redirect(`/flows/${id}${issues ? "?generated=issues" : ""}`);
+}

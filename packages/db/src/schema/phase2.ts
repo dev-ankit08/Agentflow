@@ -62,7 +62,7 @@ export const documents = pgTable(
   (t) => [index("documents_source_idx").on(t.sourceId)],
 );
 
-/** Passages for retrieval. Full-text search today; an embedding column can be added behind the same Retriever. */
+/** Passages for retrieval: full-text search, plus semantic vectors when the workspace has an embedding model. */
 export const chunks = pgTable(
   "chunks",
   {
@@ -78,6 +78,10 @@ export const chunks = pgTable(
     position: integer("position").notNull(),
     content: text("content").notNull(),
     tsv: tsvector("tsv").generatedAlwaysAs(sql`to_tsvector('english', content)`),
+    /** Semantic vector from the workspace embedding model (null until indexed). */
+    embedding: real("embedding").array(),
+    /** "provider/model" that produced `embedding`; a different model means the vector is stale. */
+    embeddingModel: text("embedding_model"),
   },
   (t) => [index("chunks_ws_idx").on(t.workspaceId), index("chunks_tsv_idx").using("gin", t.tsv)],
 );

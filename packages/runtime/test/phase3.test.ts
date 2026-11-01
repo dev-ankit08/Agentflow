@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Flow, type FlowInput } from "@agentflow/flow-schema";
 import { LLMGateway, mockProvider } from "@agentflow/llm-gateway";
-import { InProcessExecutor, MemoryRunStore, type RunEvent, type RuntimeServices } from "../src";
+import { InProcessExecutor, MemoryRunStore, extractFacts, type RunEvent, type RuntimeServices } from "../src";
 
 const mockModel = { provider: "openai_compatible" as const, name: "mock-1" };
 const at = { x: 0, y: 0 };
@@ -326,5 +326,94 @@ describe("Memory node", () => {
       t.emit,
     );
     expect((await t.store.load(anon))!.state.nodeOutputs.mem).toMatchObject({ skipped: "No signed-in end user" });
+  });
+});
+
+describe("extractFacts", () => {
+  it("returns the model's facts and usage", async () => {
+    const gateway = new LLMGateway({
+      resolveCredentials: async () => ({ apiKey: "k" }),
+      providers: {
+        openai_compatible: {
+          id: "openai_compatible",
+          chat: async () => ({
+            text: '{"facts":["Prefers email","  ","Has two dogs"]}',
+            toolCalls: [],
+            usage: { inputTokens: 30, outputTokens: 8 },
+            stopReason: "stop",
+          }),
+        },
+      },
+    });
+    const res = await extractFacts(gateway, mockModel, [
+      { role: "user", content: "Email me please, I'm out walking my two dogs" },
+    ]);
+    expect(res).toMatchObject({ facts: ["Prefers email", "Has two dogs"], tokensIn: 30, tokensOut: 8 });
+  });
+});
+
+describe("response cache", () => {
+  const agentFlow = (extra: Record<string, unknown> = {}) =>
+    flow(
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "bot",
+          type: "agent",
+          label: "Bot",
+          position: at,
+          config: { model: mockModel, systemPrompt: "Be brief.", userPrompt: "{{trigger.message}}", ...extra },
+        } as FlowInput["nodes"][number],
+        { id: "end", type: "end", label: "End", position: at, config: { message: "{{bot.text}}" } },
+      ],
+      [
+        { id: "1", source: "start", target: "bot" },
+        { id: "2", source: "bot", target: "end" },
+      ],
+    );
+  function memoryCache() {
+    const entries = new Map<string, { text: string }>();
+    const key = (q: { nodeId: string; model: string; context: string; input: string }) =>
+      JSON.stringify([q.nodeId, q.model, q.context, q.input.toLowerCase().trim()]);
+    return {
+      entries,
+      lookup: async (q: Parameters<typeof key>[0]) => entries.get(key(q)) ?? null,
+      store: async (q: Parameters<typeof key>[0], a: { text: string }) => void entries.set(key(q), a),
+    };
+  }
+
+  it("answers a repeated question from the cache at no cost", async () => {
+    const cache = memoryCache();
+    const t = setup({ cache });
+    const first = await t.executor.start(
+      { ...base, flow: agentFlow(), triggerType: "api", input: { message: "Opening hours?" } },
+      t.emit,
+    );
+    expect(cache.entries.size).toBe(1);
+    const second = await t.executor.start(
+      { ...base, flow: agentFlow(), triggerType: "api", input: { message: "opening hours? " } },
+      t.emit,
+    );
+    const [a, b] = [await t.store.load(first), await t.store.load(second)];
+    expect((b!.state.nodeOutputs.bot as { cached?: boolean }).cached).toBe(true);
+    expect((b!.state.nodeOutputs.bot as { text: string }).text).toBe(
+      (a!.state.nodeOutputs.bot as { text: string }).text,
+    );
+    const steps = t.store.steps.filter((s) => s.runId === second && s.nodeId === "bot");
+    expect(steps[0]).toMatchObject({ model: "cache (openai_compatible/mock-1)", tokensIn: 0, costUsd: 0 });
+  });
+
+  it("skips agents that opt out or have tools", async () => {
+    const cache = memoryCache();
+    const t = setup({ cache });
+    await t.executor.start(
+      { ...base, flow: agentFlow({ cache: false }), triggerType: "api", input: { message: "Hi" } },
+      t.emit,
+    );
+    await t.executor.start(
+      { ...base, flow: agentFlow({ tools: ["conn/lookup"] }), triggerType: "api", input: { message: "Hi" } },
+      t.emit,
+    );
+    expect(cache.entries.size).toBe(0);
   });
 });

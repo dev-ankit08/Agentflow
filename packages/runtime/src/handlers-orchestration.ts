@@ -1,6 +1,6 @@
 import { evaluate, renderTemplate, toText } from "@agentflow/expression-engine";
 import type { ModelRef, NodeDef } from "@agentflow/flow-schema";
-import type { ChatMessage, ToolDef } from "@agentflow/llm-gateway";
+import type { ChatMessage, LLMGateway, ToolDef } from "@agentflow/llm-gateway";
 import { untrusted } from "./guardrails";
 import { redactPII } from "./redact";
 import type { NodeContext, NodeHandler } from "./types";
@@ -48,6 +48,50 @@ async function agentLoop(
       });
     }
   }
+}
+
+/**
+ * Asks a model for durable facts about the customer in a conversation. Shared by the Memory node's
+ * "extract" mode and the API's background extraction job.
+ */
+export async function extractFacts(
+  gateway: LLMGateway,
+  model: ModelRef,
+  conversation: { role: string; content: string }[],
+  signal?: AbortSignal,
+) {
+  const transcript = conversation
+    .map((t) => `${t.role === "user" ? "Customer" : "Assistant"}: ${t.content}`)
+    .join("\n");
+  const res = await gateway.chat(
+    model,
+    {
+      messages: [
+        {
+          role: "system",
+          content:
+            "Extract durable facts about the customer worth remembering for future conversations (preferences, account details, ongoing issues). Use short third-person statements. Return an empty list if there are none.",
+        },
+        { role: "user", content: transcript },
+      ],
+      maxTokens: 400,
+      signal,
+    },
+    {
+      outputSchema: {
+        type: "object",
+        properties: { facts: { type: "array", items: { type: "string" } } },
+        required: ["facts"],
+      },
+    },
+  );
+  return {
+    facts: ((res.json as { facts?: unknown[] })?.facts ?? []).map(toText).filter((f) => f.trim()),
+    model: `${res.model.provider}/${res.model.name}`,
+    tokensIn: res.usage.inputTokens,
+    tokensOut: res.usage.outputTokens,
+    costUsd: res.costUsd,
+  };
 }
 
 const supervisor: NodeHandler<Of<"supervisor">> = {
@@ -230,38 +274,9 @@ const memory: NodeHandler<Of<"memory">> = {
     } else {
       if (!c.model) throw new Error(`"${node.label}" needs a model to extract facts`);
       await ctx.services.checkBudget?.();
-      const transcript = ctx.state.conversation
-        .map((t) => `${t.role === "user" ? "Customer" : "Assistant"}: ${t.content}`)
-        .join("\n");
-      const res = await ctx.gateway.chat(
-        c.model,
-        {
-          messages: [
-            {
-              role: "system",
-              content:
-                "Extract durable facts about the customer worth remembering for future conversations (preferences, account details, ongoing issues). Use short third-person statements. Return an empty list if there are none.",
-            },
-            { role: "user", content: transcript },
-          ],
-          maxTokens: 400,
-          signal: ctx.signal,
-        },
-        {
-          outputSchema: {
-            type: "object",
-            properties: { facts: { type: "array", items: { type: "string" } } },
-            required: ["facts"],
-          },
-        },
-      );
-      ctx.meta({
-        model: `${res.model.provider}/${res.model.name}`,
-        tokensIn: res.usage.inputTokens,
-        tokensOut: res.usage.outputTokens,
-        costUsd: res.costUsd,
-      });
-      facts = ((res.json as { facts?: unknown[] })?.facts ?? []).map(toText).filter((f) => f.trim());
+      const res = await extractFacts(ctx.gateway, c.model, ctx.state.conversation, ctx.signal);
+      ctx.meta({ model: res.model, tokensIn: res.tokensIn, tokensOut: res.tokensOut, costUsd: res.costUsd });
+      facts = res.facts;
     }
     if (facts.length) await ctx.services.memory.write(endUserId, facts);
     return { kind: "next", output: { facts, stored: facts.length } };

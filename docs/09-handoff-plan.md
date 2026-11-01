@@ -100,41 +100,92 @@ Estimates are rough engineering days for this codebase.
    Memory. Run `php -l` on the plugin.
 2. **Real-credential integrations.** Follow `docs/08-integrations-setup.md` for Bedrock, Vertex, Slack, Teams, WhatsApp
    and Stripe (each needs a public URL, e.g. ngrok/cloudflared). Fix any adapter differences found.
-3. **End-to-end test (T-5, never built).**
-   1. Add Playwright to `apps/builder`.
-   2. Script: dev login → install a template → publish → chat through `/preview/[key]` → see the reply.
-   3. Add it to CI behind a flag.
+3. **End-to-end test (T-5) — done** on branch `e2e-and-leftovers`.
+   - `apps/builder/e2e/template-to-widget.spec.ts`: dev login → install Lead Qualification → publish → chat in
+     `/preview/[key]` → check for a new reply.
+   - Run it with `corepack pnpm --filter @agentflow/builder e2e` while the dev stack is up. It uses the installed Edge
+     browser; `E2E_CHANNEL=""` switches to bundled Chromium.
+   - In CI it is the opt-in `e2e` job: start it from the Actions tab, or set the repository variable `RUN_E2E=true`. It
+     has not run on GitHub yet.
+   - It found a real bug, now fixed: the Lead Qualification template had a node named `score` that hid the `score`
+     variable, so every installed copy failed on its first message. The validator now rejects node ids that clash with
+     variable names. Copies installed before the fix need their "Total score" node renamed (e.g. to `total`).
 
 ### P1 — Finish partly built Phase 2–3 items (~10–14 days)
 
-4. **Semantic retrieval (K-1/K-2 gap).** Knowledge search is full-text only (`searchKnowledge` in
-   `apps/api/src/workspace-services.ts`).
-   1. Add an `Embedder` interface to the llm-gateway (OpenAI/Azure/Bedrock/Vertex embeddings, plus a mock).
-   2. Add an embedding column. Embedded Postgres has no pgvector, so either store `real[]` and compute cosine
-      similarity in SQL/JS for the prototype, or switch to pgvector when Docker is available.
-   3. Make search hybrid (blend of full-text rank and cosine score).
-   4. Reuse the same embedder for **insights clustering** (IN-1 currently clusters by keyword in `clusterQuestions`)
-      and for the **semantic cache** (C-3).
-5. **Memory background extraction (MEM-1).**
-   1. After a chat run ends or goes idle (e.g. 30 min after the last message), extract facts with a model and call
-      `memoryService.write`.
-   2. Run it from the API sweep in `app.ts`, alongside `resumeDueTimers`.
-   3. Add a per-workspace setting to turn it on or off, and a model choice.
-6. **More triggers (TR-1).**
-   - **Inbound email:** a `POST /v1/inbound/email/:key` webhook in the SendGrid/Mailgun inbound-parse format.
-   - **File drop:** an upload endpoint, and the file text goes into `trigger.file`.
-   - **CRM events:** reuse the webhook trigger with presets for HubSpot and Salesforce signatures.
-   - **Batch mode:** a "run for each row" option on webhook and schedule triggers, built on the Loop node.
-
-   Add each trigger type to `TriggerDef` in the schema (`email`, `file_drop` and `crm_event` already exist in the
-   enum) and to `TriggersPanel` in `inspector-orchestration.tsx`.
-7. **Approval notifications (H-2).** Notify approvers of new Inbox items by email (SMTP via `nodemailer`, Mailpit for
-   local testing) and by Slack interactive message if a Slack channel is connected. Approve/reject links use a signed
-   token.
-8. **Eval CSV import (V-1) and ROI CSV export (A-2).** Add a CSV upload on the evals dataset page and an export button
-   on Analytics. Follow the pattern of the audit CSV export in `governance.ts`.
-9. **Prompt library and prompt diff (P-1).** Save and reuse prompts per workspace, and show a side-by-side diff between
-   versions (the version diff page already exists).
+4. **Semantic retrieval (K-1/K-2) — done** on branch `e2e-and-leftovers`.
+   - Gateway: `LLMGateway.embed()`, batches of 64, with embeddings for OpenAI, Azure OpenAI, OpenAI-compatible
+     servers and the mock model (`mock-embed`, also served by the mock server at `/v1/embeddings`).
+   - DB: `chunks.embedding` (`real[]`) and `chunks.embedding_model` (migration 0007). The workspace setting is
+     `settings.embedding`.
+   - `apps/api/src/semantic.ts` holds `indexKnowledge`, `indexStatus` and hybrid `searchKnowledge`. Search fuses
+     full-text and cosine rankings with reciprocal rank fusion (vectors are compared in the API process), and falls
+     back to full-text if embedding fails.
+   - New passages are indexed on add and re-sync, and the API background sweep indexes anything pending (e.g. after
+     the model changes).
+   - Settings → "Semantic knowledge search" picks the model and shows progress, with an "Index now" button.
+   - API: `GET` and `POST /v1/knowledge/index`.
+   - **Still open:**
+     - Bedrock and Vertex embeddings.
+     - pgvector for large knowledge bases.
+     - Reusing the embedder for insights clustering (IN-1, still keyword-based in `clusterQuestions`) and for the
+       semantic cache (C-3).
+5. **Memory background extraction (MEM-1) — done** on branch `e2e-and-leftovers`.
+   - `extractMemories` in `apps/api/src/automation.ts` runs in the API sweep. For workspaces with
+     `settings.memoryExtraction.enabled`, it finds live conversations with a signed-in end user that have been quiet
+     for `idleMinutes` (default 30). It extracts facts with the shared `extractFacts` (runtime; also used by the
+     Memory node) and writes them to memory, de-duplicated.
+   - Each run gets `runs.memory_extracted_at` (migration 0008), so it is processed again only if the conversation
+     continued.
+   - Workspaces over their AI budget are skipped. A failing model is not retried until the conversation continues.
+   - Settings → "Customer memory" turns it on and picks the model and idle time.
+   - **Still open:** extraction cost is not added to the run's cost or the monthly usage figures.
+6. **More triggers (TR-1) — done in part** on branch `e2e-and-leftovers`. All of it is in `hookRoutes` in
+   `apps/api/src/routes/automation-routes.ts` and the Start node's `TriggersPanel`.
+   - **Inbound email:** `POST /v1/inbound/email/:key` (address created with `POST /v1/flows/:id/email-hook`). It
+     accepts Postmark JSON, Mailgun form fields or plain JSON. The text is `trigger.message`, plus
+     `trigger.email.{from,to,subject,text}`, and runs get trigger type `email`.
+   - **File drop:** `POST /v1/hooks/:key/file` with the file as the raw body (text, CSV or JSON; name in `x-filename`).
+     It gives `trigger.file` and, for CSV, `trigger.rows` (parsed by `parseCsv`).
+   - **CRM events:** the webhook can verify HubSpot v3 signatures using the HubSpot app's client secret.
+   - **Batch mode:** a webhook option (`PATCH /v1/flows/:id/webhook`) where a JSON array or CSV file starts one run
+     per item (up to 500), with `batchIndex` and `batchSize` in the trigger. `?wait=true` returns every run's result.
+   - **Still open:**
+     - Multipart uploads (SendGrid inbound parse, browser form uploads) and PDF or Office text extraction.
+     - Salesforce outbound messages and Platform Events.
+     - Batch mode for schedules (use a Loop node meanwhile).
+7. **Approval notifications (H-2) — done** on branch `e2e-and-leftovers`. The code is in `apps/api/src/approvals.ts`.
+   - When an Approval node pauses a live run, `notifyApprovers` emails every member at or above the approver role,
+     through SMTP (`EMAIL_SERVER`, skipped with a log line when unset). It can also post to a Slack incoming webhook
+     (stored encrypted in `settings.notifications`).
+   - Emails carry per-approver signed links (`/v1/approval-links/:id`, HMAC with `API_JWT_SECRET`, valid 7 days).
+     Opening a link shows a confirmation page, and only the POST decides, so mail scanners can't approve anything.
+   - The Inbox and the links share `decideApproval`.
+   - Settings → "Approval notifications" holds the options.
+   - **Still open:**
+     - Interactive Slack buttons (needs a Slack app with interactivity, not an incoming webhook).
+     - Notifying handoffs.
+     - Testing with a real SMTP server (Mailpit works locally: `EMAIL_SERVER=smtp://localhost:1025`).
+8. **Eval CSV import (V-1) and ROI CSV export (A-2) — done** on branch `e2e-and-leftovers`.
+   - The shared CSV helpers (`parseCsv`, `toCsv`, `csvCell`) are in `apps/api/src/csv.ts`.
+   - `POST /v1/evals/:id/cases/import` takes `{ csv }` with an input column (aliases: question, message, prompt) and
+     optional contains, outcome and rubric columns. It handles Excel's byte-order mark, up to 1000 rows, and skips
+     rows with no input.
+   - `GET /v1/evals/:id/cases.csv` exports the same columns.
+   - `GET /v1/analytics?format=csv` exports per-day ROI; `&table=flows` exports per-flow totals.
+   - The UI has an import form and a download link on each dataset, and "Export CSV: by day · by flow" on Analytics.
+9. **Prompt library and prompt diff (P-1) — done** on branch `e2e-and-leftovers`.
+   - Library: the `prompts` table (migration 0009) and `/v1/prompts` CRUD in `apps/api/src/routes/prompts.ts`. It
+     rejects secrets and broken `{{#if}}` blocks, and changes are audited.
+   - UI: a Prompts page (nav) and a "Use from library / Save to library" picker under the agent's system prompt
+     (`components/editor/prompt-library.tsx`). Agents copy the text; they don't link to it.
+   - Diff: the version page shows a side-by-side line diff of every prompt-like field (agent, supervisor, parallel,
+     end/handoff replies, approval messages) using `lineDiff` and `promptChanges` in
+     `apps/builder/src/lib/diff.ts`. "Compare with: vN" picks any other version.
+   - **Still open:**
+     - The picker exists only on the Agent node's system prompt.
+     - Linked prompts that update everywhere when edited.
+     - Unit tests for `lineDiff`; the builder has no unit-test runner yet, so it was verified in the browser.
 10. **Shopify (PL-1, rest).** Build a theme app extension that injects the widget script and passes the customer
     identity (signed by an app proxy).
 
@@ -144,19 +195,63 @@ Estimates are rough engineering days for this codebase.
     - Auth.js OIDC provider per org (Okta/Entra/Google), with SAML through a library such as `@boxyhq/saml-jackson`.
     - SCIM 2.0 `/scim/v2/Users|Groups` endpoints with a bearer token per org, mapping to `memberships`.
     - Settings UI: domain verification and "enforce SSO".
-12. **Custom roles (EN-2).**
-    - Today roles are fixed (owner > admin > builder > reviewer > viewer, `hasRole` in `apps/api/src/auth.ts`).
-    - Add a `roles` table with permission sets (e.g. `flows.publish`, `keys.manage`, `inbox.decide`).
-    - Replace `requireWorkspace(minRole)` with `requirePermission(perm)`, keeping the built-in roles as presets.
-13. **Real-time co-editing (CO-1, rest).**
-    - Add Yjs: a `y-websocket`-style endpoint on the API (Fastify websocket) and the editor's nodes and edges in a Y.Doc.
-    - Keep autosave of the draft JSON.
-    - Presence, comments and conflict detection already exist; the conflict banner becomes a fallback.
-14. **Scheduled ROI email reports (A-3).** A weekly cron in the sweep renders the Analytics numbers to an HTML email
-    sent to admins. Needs the SMTP from item 7.
-15. **Semantic cache (C-3).** In the gateway, before calling the model, look up recent answers with the same flow,
-    node and normalised prompt (exact match first, then embedding similarity over a threshold). Show cache hits in
-    traces and add a per-agent opt-out.
+12. **Custom roles (EN-2) — done** on branch `e2e-and-leftovers`.
+    - `apps/api/src/permissions.ts` defines 18 permissions, each with the lowest built-in role that has it (the
+      presets), and `ROUTE_PERMISSIONS` maps every protected write route to one. A test fails if a new protected
+      route is missing from the map.
+    - The `custom_roles` table (name, base role, permissions) and `memberships.custom_role_id` were added in
+      migration 0011.
+    - `requireWorkspace` is unchanged for members without a custom role. For members with one, the role's
+      permissions decide on mapped routes (granting or denying compared with the base role), and the base role
+      applies everywhere else.
+    - `/v1/roles` CRUD (audited). `PATCH /v1/members/:id` accepts `{ customRoleId }`, and the role's base role
+      becomes the member's built-in role.
+    - The Inbox honours an `inbox.decide` grant.
+    - UI: Settings → "Custom roles" (permission checkboxes), and custom roles in each member's role dropdown.
+    - **Still open:** the builder UI still hides buttons by built-in role, so a custom role that grants more than its
+      base role can do it through the API but may not see the button.
+13. **Real-time co-editing (CO-1) — done** on branch `e2e-and-leftovers`.
+    - Server: `apps/api/src/collab.ts` serves `GET /v1/collab/:flowId` (websocket, y-websocket protocol) with one Yjs
+      document per open flow, seeded from the draft. Nodes and edges are maps keyed by id; flow fields live in "meta".
+    - Tokens: connections need a one-hour token (audience `agentflow-collab`) from the builder's
+      `/api/collab-token`.
+    - Read-only access: members below builder can watch, but their edits are ignored.
+    - Saving: the server writes the merged draft back about 0.8 s after the last change, and when the last editor
+      leaves.
+    - Editor: `useCollab` in `components/editor/collab.ts` pushes only this editor's own changes, compared with the
+      last state it synced. This prevents a peer's stale copy from overwriting someone else's edit, a bug found and
+      fixed in the two-tab test.
+    - While live, the header shows "● Live · saved automatically", per-tab autosave and conflict banners step aside,
+      and Publish and Test save first. If the socket is down, the editor falls back to normal saving with conflict
+      detection.
+    - **Still open:**
+      - Undo can revert a collaborator's later change to the same node.
+      - Live cursors (presence already shows who is on which node).
+      - Documents are held in the API process (a scale-up item).
+14. **Scheduled ROI email reports (A-3) — done** on branch `e2e-and-leftovers`. The code is in
+    `apps/api/src/reports.ts`.
+    - `sendDueReports` runs in the API sweep. On the workspace's chosen weekday and hour (UTC), it emails owners,
+      admins and extra recipients once that day. `lastSentAt` is recorded before sending, so a restart can't double
+      send.
+    - The report (`buildReport`) covers the last 7 days against the previous 7: conversations, automation, hours
+      and net savings, AI cost, satisfaction and the busiest flows, with a dashboard link.
+    - The numbers come from `analyticsSummary` (now shared with the dashboard and the CSV export).
+    - `POST /v1/reports/send-test` emails the caller; it answers 409 when `EMAIL_SERVER` is not set.
+    - Settings → "Weekly report".
+    - **Still open:** daily or monthly schedules, and per-recipient time zones.
+15. **Semantic cache (C-3) — done** on branch `e2e-and-leftovers`.
+    - The `response_cache` table (migration 0010) and `cacheService` in `apps/api/src/cache.ts` are exposed to the
+      runtime as `services.cache`.
+    - The Agent handler checks the cache before calling the model, only for agents without tools and without
+      `cache: false`. The key is flow, node, model and the exact context: rendered system prompt, earlier turns,
+      output schema and temperature.
+    - The question matches exactly after normalising case and spaces, or with cosine ≥ 0.95 when `similar` is on
+      and an embedding model is set.
+    - Hits cost nothing and appear in traces as model `cache (provider/model)`. Evals never use the cache. Expired
+      entries are purged by the hourly sweep.
+    - Settings → "Response cache" (on/off, hours to keep, reworded matching, hit counts), plus an opt-out per agent
+      under Advanced.
+    - **Still open:** a "clear cache" button, and caching for Supervisor and Parallel nodes.
 16. **SharePoint + Confluence sources and reranking (K-4).** Microsoft Graph / Confluence REST connectors with
     scheduled re-sync (also the K-3 gap: Google Drive and Notion). Rerank with an LLM, or a cross-encoder when one is
     available.
@@ -166,9 +261,32 @@ Estimates are rough engineering days for this codebase.
 17. **Template and connector marketplace (MP-1):** publish, review, rate and install.
 18. **White-label / agency mode (WL-1):** partner → client org → workspace, branding, custom domains, rebilling. The DB
     needs a `partners` table and `orgs.partnerId`.
-19. **Expose flows as MCP servers (MS-1):** a Streamable HTTP MCP endpoint per published flow, with the flow's Start
-    inputs as the tool schema.
-20. **AI flow generator (AI-1):** plain text → draft flow JSON, validated by `validateFlow` and repaired if invalid.
+19. **Expose flows as MCP servers (MS-1) — done** on branch `e2e-and-leftovers`. The code is in
+    `apps/api/src/routes/mcp-server.ts`.
+    - Endpoint: `POST /v1/mcp/:flowId` is a stateless Streamable HTTP MCP server with one tool, named after the flow
+      (e.g. `order_support`). It takes `{ message, inputs? }`, runs the live version, and returns the replies, the End
+      output and any pause notice.
+    - Auth: a per-flow bearer token (`afm_…`), stored as a SHA-256 hash and shown once.
+    - Management: `GET`, `POST` (turn on or rotate, optional tool description) and `DELETE /v1/flows/:id/mcp`. These
+      need the `flows.deploy` permission and are audited.
+    - Deploy page: a "Use from other AI tools (MCP)" card with the address, the one-time token, a Claude Code command
+      and a JSON config.
+    - Verified with the official MCP client in tests, and with curl against the live Order support flow.
+    - **Still open:** OAuth for MCP clients, and per-flow input schemas taken from the Start node.
+20. **AI flow generator (AI-1) — done** on branch `e2e-and-leftovers`. The code is in `apps/api/src/generator.ts`.
+    - Prompt: a compact node catalogue, the wiring rules and the Order support flow as an example. The model returns
+      JSON.
+    - `normalise` fills in a Start node, labels and the chosen model on every model-using node, and lays nodes out
+      left to right.
+    - `validateFlow` errors go back to the model for up to 2 repairs. The last attempt is saved as a new draft
+      either way, and its remaining issues are returned.
+    - Endpoint: `POST /v1/flows/generate { description, model, name? }`. It needs `flows.edit`, checks the AI
+      budget, is audited, and each model call has a 90 s timeout.
+    - Flows page: "✦ Describe a flow and let AI draft it".
+    - Verified with scripted model answers (valid first time, repaired, repairs exhausted) and end to end with the
+      mock model. **Output quality is not yet judged against a real model.**
+    - Found and fixed along the way: the mock model's schema detection was greedy, and a crash left requests hanging;
+      it now answers 500.
 21. **Voice channel (VO-1):** WebRTC with STT/TTS.
 22. **Self-host package (SH-1)** and **SOC 2 readiness (SOC-1).**
 

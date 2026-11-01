@@ -188,6 +188,22 @@ export function validateFlow(input: unknown): ValidationResult {
     }
   }
 
+  // Node outputs and variables share one namespace in formulas ({{score}}), and node outputs win,
+  // so a node named like a variable would silently hide the variable.
+  const variableNames = new Set(flow.variables.map((v) => v.name));
+  for (const node of flow.nodes) {
+    if (node.type === "assignment") for (const a of node.config.assignments) variableNames.add(a.variable);
+    if (node.type === "loop") variableNames.add(node.config.itemVariable).add(`${node.config.itemVariable}_index`);
+  }
+  for (const node of flow.nodes) {
+    if (variableNames.has(node.id)) {
+      errors.push({
+        message: `Node id "${node.id}" is also a variable name; rename the node so {{${node.id}}} is unambiguous`,
+        nodeId: node.id,
+      });
+    }
+  }
+
   // Schedules must be valid cron expressions.
   flow.triggers.forEach((t, i) => {
     if (t.type !== "schedule") return;

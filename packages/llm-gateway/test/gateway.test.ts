@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LLMGateway, ProviderError, validateJson, type ProviderId } from "../src";
-import { mockReply } from "../src/mock";
+import { mockEmbedding, mockProvider, mockReply } from "../src/mock";
 
 const sse = (events: unknown[], status = 200) =>
   new Response(events.map((e) => `data: ${typeof e === "string" ? e : JSON.stringify(e)}\n\n`).join(""), {
@@ -206,5 +206,39 @@ describe("mock model", () => {
       tools,
     });
     expect(done).toEqual({ content: 'Here is what I found for "order 1042": shipped' });
+  });
+});
+
+describe("embeddings", () => {
+  it("embeds in batches with the mock model, keeping related texts close", async () => {
+    const calls: number[] = [];
+    const gateway = new LLMGateway({
+      resolveCredentials: async () => ({ apiKey: "k" }),
+      providers: {
+        openai_compatible: {
+          ...mockProvider,
+          embed: async (req, creds) => {
+            calls.push(req.input.length);
+            return mockProvider.embed!(req, creds);
+          },
+        },
+      },
+    });
+    const texts = Array.from({ length: 70 }, (_, i) => `refund policy number ${i}`);
+    const vectors = await gateway.embed({ provider: "openai_compatible", name: "mock-embed" }, texts);
+    expect(calls).toEqual([64, 6]);
+    expect(vectors).toHaveLength(70);
+    const dot = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i]!, 0);
+    const refund = mockEmbedding("How do refunds work?");
+    expect(dot(refund, mockEmbedding("Refunds are issued within 5 days"))).toBeGreaterThan(
+      dot(refund, mockEmbedding("Shipping takes three days")),
+    );
+  });
+
+  it("explains when a provider has no embeddings API", async () => {
+    const gateway = new LLMGateway({ resolveCredentials: async () => ({ apiKey: "k" }) });
+    await expect(gateway.embed({ provider: "anthropic", name: "x" }, ["hi"])).rejects.toThrow(
+      /does not offer embeddings/,
+    );
   });
 });

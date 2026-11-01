@@ -31,10 +31,15 @@ export type ChatResponse = {
 
 export type ProviderCredentials = { apiKey: string; baseUrl?: string | null };
 
+export type EmbedRequest = { model: string; input: string[]; signal?: AbortSignal };
+export type EmbedResponse = { vectors: number[][]; usage: Usage };
+
 /** One provider's wire format. Adapters use fetch directly so they work with any compatible endpoint. */
 export interface LLMProvider {
   id: ProviderId;
   chat(req: ChatRequest, creds: ProviderCredentials, onToken?: (token: string) => void): Promise<ChatResponse>;
+  /** Text embeddings, for providers that offer them. */
+  embed?(req: EmbedRequest, creds: ProviderCredentials): Promise<EmbedResponse>;
 }
 
 export class ProviderError extends Error {

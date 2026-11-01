@@ -1,3 +1,4 @@
+import type { ModelRef } from "@agentflow/flow-schema";
 import { index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { newId } from "../ids";
 import { users } from "./auth";
@@ -13,6 +14,21 @@ export type WorkspaceSettings = {
   roi?: { costPerConversation: number; minutesPerConversation: number };
   /** Data retention (H6): delete runs after `days`; zeroRetention keeps no prompts, outputs or transcripts. */
   retention?: { days?: number; zeroRetention?: boolean };
+  /** Embedding model for semantic knowledge search (H7); full-text search only when unset. */
+  embedding?: { provider: "openai" | "azure_openai" | "openai_compatible"; name: string };
+  /** Learn facts about signed-in customers from finished or idle conversations (H7). */
+  /** Weekly ROI email to owners, admins and extra recipients (H4); weekday 0 = Sunday, UTC. */
+  reports?: { enabled: boolean; weekday: number; hourUtc: number; extraRecipients: string[]; lastSentAt?: string };
+  /** Response cache (H11): reuse answers to repeated questions for `ttlHours`; `similar` also matches rewordings. */
+  cache?: { enabled: boolean; ttlHours: number; similar: boolean };
+  /** Who hears about new approvals (H5): approvers by email, and optionally a Slack channel. */
+  notifications?: { emailApprovers?: boolean; slackWebhookEnc?: string };
+  memoryExtraction?: {
+    enabled: boolean;
+    model: ModelRef;
+    /** Minutes without activity before a conversation is mined. */
+    idleMinutes: number;
+  };
 };
 
 const createdAt = () => timestamp("created_at", { mode: "date", withTimezone: true }).defaultNow().notNull();
@@ -43,6 +59,24 @@ export const workspaces = pgTable(
   (t) => [index("workspaces_org_idx").on(t.orgId)],
 );
 
+/** Named permission sets (H6). Members with one are checked by its permissions on protected routes; `baseRole` covers the rest. */
+export const customRoles = pgTable(
+  "custom_roles",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => newId("crl")),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    baseRole: roleEnum("base_role").notNull(),
+    permissions: jsonb("permissions").$type<string[]>().default([]).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("custom_roles_ws_name_idx").on(t.workspaceId, t.name)],
+);
+
 export const memberships = pgTable(
   "memberships",
   {
@@ -53,6 +87,7 @@ export const memberships = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     role: roleEnum("role").notNull(),
+    customRoleId: text("custom_role_id").references(() => customRoles.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("memberships_user_ws_idx").on(t.userId, t.workspaceId)],

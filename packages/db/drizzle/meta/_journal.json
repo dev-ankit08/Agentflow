@@ -50,6 +50,41 @@
       "when": 1793507048104,
       "tag": "0006_lucky_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793521208085,
+      "tag": "0007_groovy_cannonball",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793521598330,
+      "tag": "0008_absent_nocturne",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793525392207,
+      "tag": "0009_colorful_metal_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793525910604,
+      "tag": "0010_opposite_roland_deschain",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793526638858,
+      "tag": "0011_wakeful_sprite",
+      "breakpoints": true
     }
   ]
 }

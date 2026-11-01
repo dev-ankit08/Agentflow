@@ -5,6 +5,7 @@ import { Flash } from "@/components/flash";
 import { ApiError, apiFetch } from "@/lib/api";
 import { can, requireWorkspace } from "@/lib/context";
 import { addCase, createDataset, deleteCase, runEvals, saveGate } from "../../../../actions-phase2";
+import { importEvalCases } from "../../../../actions-phase3";
 
 type Case = { id: string; input: string; expected: { contains?: string; outcome?: string; rubric?: string } };
 type EvalRun = {
@@ -215,6 +216,32 @@ export default async function EvalsPage({
                           + Add case
                         </Button>
                       </div>
+                    </form>
+                    <form
+                      action={importEvalCases}
+                      className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted"
+                    >
+                      <input type="hidden" name="flowId" value={id} />
+                      <input type="hidden" name="datasetId" value={ds.id} />
+                      <span>Or import many from CSV (columns: input, contains, outcome, rubric):</span>
+                      <input
+                        type="file"
+                        name="file"
+                        accept=".csv,text/csv"
+                        required
+                        aria-label="CSV file of test cases"
+                        className="text-xs"
+                      />
+                      <Button type="submit" variant="secondary" size="sm">
+                        Import
+                      </Button>
+                      <a
+                        href={`/api/v1/evals/${ds.id}/cases.csv`}
+                        className="ml-auto text-accent hover:underline"
+                        download
+                      >
+                        Download cases as CSV
+                      </a>
                     </form>
                   </CardBody>
                 )}

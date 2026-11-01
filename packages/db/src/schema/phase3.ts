@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { customType, index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { customType, index, integer, jsonb, pgTable, real, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { newId } from "../ids";
 import { users } from "./auth";
 import { workspaces } from "./core";
@@ -70,4 +70,57 @@ export const flowComments = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("flow_comments_flow_idx").on(t.flowId)],
+);
+
+// --- Prompt library ---------------------------------------------------------------------------
+
+/** Reusable prompts shared across a workspace's agents. */
+export const prompts = pgTable(
+  "prompts",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => newId("prm")),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    body: text("body").notNull(),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("prompts_ws_idx").on(t.workspaceId)],
+);
+
+// --- Response cache (H11) --------------------------------------------------------------------
+
+/** Answers to repeated questions, per agent node and exact context; matched exactly or by embedding similarity. */
+export const responseCache = pgTable(
+  "response_cache",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => newId("rc")),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    flowId: text("flow_id")
+      .notNull()
+      .references(() => flows.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    contextHash: text("context_hash").notNull(),
+    inputHash: text("input_hash").notNull(),
+    input: text("input").notNull(),
+    embedding: real("embedding").array(),
+    answer: jsonb("answer").$type<{ text: string; json?: unknown }>().notNull(),
+    hits: integer("hits").default(0).notNull(),
+    createdAt: createdAt(),
+    expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("response_cache_key_idx").on(t.workspaceId, t.flowId, t.nodeId, t.contextHash, t.inputHash),
+    index("response_cache_lookup_idx").on(t.workspaceId, t.flowId, t.nodeId, t.contextHash),
+  ],
 );

@@ -131,6 +131,11 @@ export interface RuntimeServices {
   /** Throws when the workspace's monthly AI budget is used up. */
   checkBudget?: () => Promise<void>;
   /** Long-term facts about an end user (Memory nodes). */
+  /** Response cache for repeated questions (H11); absent when caching is off and for evals. */
+  cache?: {
+    lookup(q: CacheQuery): Promise<CachedAnswer | null>;
+    store(q: CacheQuery, answer: CachedAnswer): Promise<void>;
+  };
   memory?: {
     read(endUserId: string, query: string, topK: number): Promise<string[]>;
     write(endUserId: string, facts: string[]): Promise<void>;
@@ -170,3 +175,7 @@ export interface NodeHandler<N extends NodeDef = NodeDef> {
   type: N["type"];
   run(ctx: NodeContext, node: N): Promise<NodeResult>;
 }
+
+/** What a cached answer must match: the agent, its model and everything it saw besides the user message. */
+export type CacheQuery = { flowId: string; nodeId: string; model: string; context: string; input: string };
+export type CachedAnswer = { text: string; json?: unknown };

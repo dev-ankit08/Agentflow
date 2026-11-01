@@ -4,10 +4,12 @@ import { auditEvents, feedback, memories, runs, type Db } from "@agentflow/db";
 import { currentWorkspace } from "../auth";
 import type { Deps } from "../app";
 import { audit } from "../automation";
+import { csvCell } from "../csv";
 
 /** Readable names for audited routes. Routes not listed here (drafts, test runs, searches, comments) are not audited. */
 const AUDITED: Record<string, string> = {
   "POST /v1/flows": "Created flow",
+  "POST /v1/flows/generate": "Generated flow with AI",
   "DELETE /v1/flows/:id": "Deleted flow",
   "POST /v1/flows/:id/publish": "Published flow",
   "POST /v1/flows/:id/versions/:versionId/rollback": "Rolled back flow",
@@ -16,9 +18,14 @@ const AUDITED: Record<string, string> = {
   "POST /v1/flows/:id/widget/identity-secret": "Rotated identity secret",
   "POST /v1/flows/:id/webhook": "Created webhook trigger",
   "DELETE /v1/flows/:id/webhook": "Removed webhook trigger",
+  "PATCH /v1/flows/:id/webhook": "Changed webhook batch mode",
+  "POST /v1/flows/:id/email-hook": "Created inbound email address",
+  "DELETE /v1/flows/:id/email-hook": "Removed inbound email address",
   "PUT /v1/flows/:id/ab-test": "Started A/B test",
   "DELETE /v1/flows/:id/ab-test": "Stopped A/B test",
   "POST /v1/flows/:id/ab-test/promote": "Promoted A/B challenger",
+  "POST /v1/flows/:id/mcp": "Enabled MCP server",
+  "DELETE /v1/flows/:id/mcp": "Disabled MCP server",
   "POST /v1/reviews/:id/decide": "Decided review",
   "POST /v1/approvals/:id/decide": "Decided approval",
   "POST /v1/provider-keys": "Added model key",
@@ -36,11 +43,12 @@ const AUDITED: Record<string, string> = {
   "PUT /v1/workspace/settings": "Changed workspace settings",
   "POST /v1/templates/:slug/install": "Installed template",
   "DELETE /v1/end-users/:id": "Deleted end-user data",
-};
-
-const csvCell = (v: unknown) => {
-  const s = v == null ? "" : typeof v === "string" ? v : v instanceof Date ? v.toISOString() : JSON.stringify(v);
-  return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+  "POST /v1/roles": "Created custom role",
+  "PUT /v1/roles/:id": "Edited custom role",
+  "DELETE /v1/roles/:id": "Deleted custom role",
+  "POST /v1/prompts": "Added library prompt",
+  "PUT /v1/prompts/:id": "Edited library prompt",
+  "DELETE /v1/prompts/:id": "Deleted library prompt",
 };
 
 /** Records every successful configuration change once the response is sent. Bodies are never stored. */

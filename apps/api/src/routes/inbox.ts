@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { approvals, flows, handoffs, runs, type Role } from "@agentflow/db";
+import { decideApproval } from "../approvals";
 import { HttpError, currentUser, currentWorkspace, hasRole } from "../auth";
 import type { Deps } from "../app";
 import { sweepExpiredApprovals } from "../workspace-services";
@@ -66,36 +67,17 @@ export async function inboxRoutes(app: FastifyInstance, { db, auth, executor, ch
         .from(approvals)
         .where(and(eq(approvals.id, req.params.id), eq(approvals.workspaceId, ws.id)));
       if (!approval) throw new HttpError(404, "Approval not found");
-      if (!hasRole(ws.role, approval.approverRole as Role))
+      // A custom role with "inbox.decide" may decide any approval; otherwise the approver role applies.
+      const granted = Boolean(ws.customRoleId) && ws.permissions.includes("inbox.decide");
+      if (!granted && !hasRole(ws.role, approval.approverRole as Role))
         throw new HttpError(403, `Requires ${approval.approverRole} role or higher`);
-      // Claim the approval atomically so two people cannot decide it twice.
-      const [claimed] = await db
-        .update(approvals)
-        .set({
-          status: body.decision === "approve" ? "approved" : "rejected",
-          decidedBy: user.id,
-          note: body.note,
-          decidedAt: new Date(),
-        })
-        .where(and(eq(approvals.id, approval.id), eq(approvals.status, "pending")))
-        .returning({ id: approvals.id });
-      if (!claimed) throw new HttpError(409, "This approval was already decided");
-
-      const handle = body.decision === "approve" ? "approved" : "rejected";
-      let error: string | null = null;
-      const later: string[] = [];
-      await executor.resume(
-        approval.runId,
-        { handle, output: { decision: handle, decidedBy: user.email ?? user.id, note: body.note ?? null } },
-        (e) => {
-          if (e.type === "error") error = e.message;
-          if (e.type === "message") later.push(e.content);
-        },
+      return decideApproval(
+        { db, executor, channels },
+        approval.id,
+        body.decision,
+        { userId: user.id, label: user.email ?? user.id },
+        body.note,
       );
-      // Conversations from Slack, Teams or WhatsApp get the follow-up there (the widget polls for it).
-      await channels.notify(approval.runId, later);
-      const [run] = await db.select({ status: runs.status }).from(runs).where(eq(runs.id, approval.runId));
-      return { id: approval.id, decision: handle, runStatus: run?.status, error };
     },
   );
 

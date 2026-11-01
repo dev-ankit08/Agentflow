@@ -30,6 +30,34 @@ const agent: NodeHandler<Of<"agent">> = {
       { role: "user", content: user },
     ];
 
+    // Repeated questions can be answered from the cache, but never for agents with tools (calls have side effects).
+    const cacheQuery =
+      ctx.services.cache && c.cache !== false && !c.tools?.length
+        ? {
+            flowId: ctx.flow.id,
+            nodeId: node.id,
+            model: `${c.model.provider}/${c.model.name}`,
+            context: JSON.stringify([system, history, c.outputSchema ?? null, c.temperature ?? null]),
+            input: user,
+          }
+        : null;
+    const cached = cacheQuery ? await ctx.services.cache!.lookup(cacheQuery).catch(() => null) : null;
+    if (cached) {
+      if (!c.outputSchema) ctx.emit({ type: "token", nodeId: node.id, text: cached.text });
+      ctx.meta({ model: `cache (${cacheQuery!.model})`, tokensIn: 0, tokensOut: 0, costUsd: 0 });
+      return {
+        kind: "next",
+        output: {
+          text: cached.text,
+          output: cached.json ?? cached.text,
+          toolCalls: [],
+          usage: { inputTokens: 0, outputTokens: 0 },
+          model: c.model.name,
+          cached: true,
+        },
+      };
+    }
+
     const tools = c.tools?.length ? await ctx.tools.describe(c.tools) : [];
     const toolCalls: { tool: string; args: unknown; result: unknown; isError: boolean }[] = [];
     let tokensIn = 0;
@@ -66,6 +94,9 @@ const agent: NodeHandler<Of<"agent">> = {
           tokensOut,
           costUsd: cost,
         });
+        if (cacheQuery && res.text.trim()) {
+          await ctx.services.cache!.store(cacheQuery, { text: res.text, json: res.json }).catch(() => {});
+        }
         return {
           kind: "next",
           output: {

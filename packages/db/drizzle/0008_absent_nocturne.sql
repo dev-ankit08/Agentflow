@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "memory_extracted_at" timestamp with time zone;
