@@ -7,4 +7,6 @@ export default defineConfig({
   target: "node22",
   clean: true,
   noExternal: [/^@agentflow\//],
+  // CommonJS dependencies of those packages (e.g. yaml) are bundled too and call require(), which ESM lacks.
+  banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
 });

@@ -38,6 +38,14 @@ jobs:
       - run: pnpm db:migrate
       - run: pnpm test
       - run: pnpm build
+      # The production bundles must start, not just build (a bundled dependency once crashed them on load).
+      - name: Start the production API and worker
+        run: |
+          node apps/api/dist/server.js > api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:4000/health && break; sleep 1; done
+          curl -sf http://localhost:4000/health || (cat api.log; exit 1)
+          timeout 10 node apps/worker/dist/index.js > worker.log 2>&1 || true
+          grep -q "ready" worker.log || (cat worker.log; exit 1)
 
   # Browser test of the whole stack (template → publish → widget chat). Opt-in: run it from the Actions tab,
   # or set the repository variable RUN_E2E=true to run it on every push.
