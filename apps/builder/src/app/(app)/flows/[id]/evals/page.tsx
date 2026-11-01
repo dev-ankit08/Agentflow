@@ -138,7 +138,7 @@ export default async function EvalsPage({
               <Card key={ds.id}>
                 <CardHeader
                   title={ds.name}
-                  description={
+                  subtitle={
                     latest
                       ? `Last run ${new Date(latest.createdAt).toLocaleString()}: ${latest.passed}/${latest.total} passed${stale ? " · draft changed since" : ""}`
                       : `${ds.cases.length} case(s), not run yet`

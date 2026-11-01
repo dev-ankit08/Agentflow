@@ -1,0 +1,23 @@
+{
+  // GitHub Codespaces trial of AgentFlow: installs and builds once, then starts everything on each start.
+  // See docs/10-codespaces-trial.md.
+  "name": "AgentFlow trial",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "hostRequirements": { "cpus": 2, "memory": "8gb" },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/start.sh",
+  "forwardPorts": [3100, 4000],
+  "portsAttributes": {
+    "3100": { "label": "AgentFlow (share this)", "onAutoForward": "notify" },
+    "4000": { "label": "AgentFlow API (widget)", "onAutoForward": "silent" },
+    "4010": { "label": "Mock model", "onAutoForward": "ignore" },
+    "4020": { "label": "Demo orders MCP", "onAutoForward": "ignore" },
+    "5433": { "label": "Postgres", "onAutoForward": "ignore" }
+  },
+  "customizations": {
+    "codespaces": { "openFiles": ["docs/10-codespaces-trial.md"] }
+  }
+}

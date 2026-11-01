@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { nextCronRun, parseCron, type FlowInput, type NodeDef } from "@agentflow/flow-schema";
 import { Button, Input, Select } from "@agentflow/ui";
-import { FormulaField, ModelPicker, Row, TemplateField } from "./fields";
+import { FormulaField, ModelPicker, Row, TemplateField, HowItWorks } from "./fields";
 import { ContextRulesField } from "./context-rules-field";
 import { uniqueId } from "./model";
 
@@ -189,9 +189,7 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
         set(node.config.tasks.map((t, j) => (j === i ? { ...t, ...patch } : t)));
       return (
         <>
-          <p className="text-[11px] text-muted">
-            Every task runs at the same time; the flow continues when all have answered.
-          </p>
+          <HowItWorks>Every task runs at the same time; the flow continues when all have answered.</HowItWorks>
           {node.config.tasks.map((t, i) => (
             <details key={i} className="rounded-lg border border-border p-2" open={i === 0}>
               <summary className="cursor-pointer text-xs font-medium text-text">
@@ -380,10 +378,10 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
               />
             </Row>
           )}
-          <p className="text-[11px] text-muted">
+          <HowItWorks>
             Use waits in background flows (schedules, webhooks) or for follow-ups. A chat user sees the reply when the
             wait is over.
-          </p>
+          </HowItWorks>
         </>
       );
     }
@@ -455,10 +453,10 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
               onChange={(model) => set({ model })}
             />
           )}
-          <p className="text-[11px] text-muted">
+          <HowItWorks>
             Memory needs a signed-in customer (an identity token on the widget). Anonymous visitors are skipped. Admins
             can view or erase a customer&apos;s data in Settings.
-          </p>
+          </HowItWorks>
         </>
       );
     }
@@ -610,7 +608,7 @@ export function TriggersPanel({
         </label>
         {schedule && (
           <>
-            <Row label="Schedule (cron, UTC)" hint={preview}>
+            <Row label="Schedule (cron, UTC)" note={preview}>
               <div className="flex gap-1">
                 <Input
                   value={cron}
@@ -634,7 +632,11 @@ export function TriggersPanel({
                 </Select>
               </div>
             </Row>
-            <Row label="Trigger input (JSON)" hint={inputError ?? "Available as {{trigger.*}} in scheduled runs."}>
+            <Row
+              label="Trigger input (JSON)"
+              hint="Available as {{trigger.*}} in scheduled runs."
+              note={inputError && <span className="text-danger">{inputError}</span>}
+            >
               <Input
                 value={inputText}
                 disabled={readOnly}
@@ -732,11 +734,11 @@ export function TriggersPanel({
         {emailUrl ? (
           <>
             <Input readOnly value={emailUrl} className="h-8 font-mono text-[11px]" onFocus={(e) => e.target.select()} />
-            <p className="text-[11px] text-muted">
+            <HowItWorks>
               Point your email provider&apos;s inbound webhook (Postmark, Mailgun, or any service that posts JSON or
               form fields) here. The email text is <code className="font-mono">{"{{trigger.message}}"}</code>; sender
               and subject are in <code className="font-mono">{"{{trigger.email.*}}"}</code>.
-            </p>
+            </HowItWorks>
             {!readOnly && (
               <Button variant="ghost" size="sm" onClick={removeEmail}>
                 Remove

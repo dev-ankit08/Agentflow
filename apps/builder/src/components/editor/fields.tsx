@@ -3,7 +3,7 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { checkFormula, checkTemplate } from "@agentflow/expression-engine";
 import { providers, type ModelRef } from "@agentflow/flow-schema";
-import { Button, Input, Label, Select, cn } from "@agentflow/ui";
+import { Button, InfoTip, Input, Label, Select, cn } from "@agentflow/ui";
 import { modelSuggestions, providerLabels } from "./model";
 
 /** A comma-separated list field that keeps what you type (commas, spaces) while updating the parsed list. */
@@ -42,13 +42,68 @@ export function ListInput({
   );
 }
 
-export function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+/** A labelled field: `hint` explains it in a tooltip; `note` stays visible under it (warnings, live feedback). */
+export function Row({
+  label,
+  hint,
+  note,
+  children,
+}: {
+  label: string;
+  hint?: ReactNode;
+  note?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className="space-y-1">
-      <Label className="mb-0 text-xs font-medium text-muted">{label}</Label>
+      <div className="flex items-center gap-1.5">
+        <Label className="mb-0 text-xs font-medium text-muted">{label}</Label>
+        {hint && <InfoTip label={`About ${label}`}>{hint}</InfoTip>}
+      </div>
       {children}
-      {hint && <p className="text-[11px] text-muted">{hint}</p>}
+      {note && <p className="text-[11px] text-muted">{note}</p>}
     </div>
+  );
+}
+
+/** A one-line "How it works" with the explanation in a tooltip, for help that has no field to sit next to. */
+export function HowItWorks({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] text-muted">
+      <InfoTip label="How it works">{children}</InfoTip>
+      <span>How it works</span>
+    </div>
+  );
+}
+
+/** A collapsible group of settings; the summary shows a short status (e.g. "2 selected") when closed. */
+export function Section({
+  title,
+  hint,
+  status,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  hint?: ReactNode;
+  status?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group rounded-lg border border-border p-2" open={defaultOpen}>
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-text [&::-webkit-details-marker]:hidden">
+        <span className="text-muted transition group-open:rotate-90">▸</span>
+        {title}
+        {status && <span className="font-normal text-muted">· {status}</span>}
+        {hint && (
+          <span onClick={(e) => e.preventDefault()} className="inline-flex">
+            <InfoTip label={`About ${title}`}>{hint}</InfoTip>
+          </span>
+        )}
+      </summary>
+      <div className="mt-2">{children}</div>
+    </details>
   );
 }
 
@@ -108,7 +163,11 @@ export function TemplateField({
         >
           {showVars ? "Hide variables" : "{{ Insert variable }}"}
         </button>
-        <span className="text-[10px] text-muted">{"{{#if cond}} … {{else}} … {{/if}}"}</span>
+        <InfoTip label="Template syntax">
+          <span className="font-mono">{"{{variable}}"}</span> inserts a value.{" "}
+          <span className="font-mono">{"{{#if cond}} … {{else}} … {{/if}}"}</span> adds text only when a condition
+          holds.
+        </InfoTip>
       </div>
       {showVars && (
         <div className="mt-1 flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-lg bg-surface-2 p-2">
@@ -312,7 +371,7 @@ export function ModelPicker({
   return (
     <Row
       label={label}
-      hint={
+      note={
         missing ? <span className="text-warning">No key for this provider yet — add one in Settings.</span> : undefined
       }
     >

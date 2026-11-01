@@ -301,6 +301,28 @@ When asked:
 
 See `docs/03-architecture.md` §3.7/§10.
 
+## 4d. Friendlier builder and step debugger (branch `builder-ux`)
+
+- **Tooltips:** `Tooltip` / `InfoTip` in `packages/ui/src/tooltip.tsx` (portal; hover and keyboard focus; Esc closes).
+  `Field` hints, `PageHeader` / `CardHeader` `description` and the editor's `Row` `hint` render as ⓘ tooltips.
+  Facts that must stay visible use `subtitle` (headers) or `note` (`Row`); explanations without a field use
+  `HowItWorks`.
+- **Panels:** `useStoredState` (`apps/builder/src/lib/use-stored-state.ts`) remembers the layout per browser
+  (`af-editor-panels`, `af-sidebar`). The palette (`palette.tsx`: search, collapsible groups, icon rail) and the
+  inspector collapse with `[` and `]`; `\` toggles focus mode; `T` opens the console; `?` lists shortcuts. The test
+  console minimizes without losing the run, resizes by dragging its top edge, and can hide its chat or timeline. The
+  app sidebar collapses to icons and has a mobile menu.
+- **Debugger:** the runtime records a `StepDebug` per step (`packages/runtime/src/debug.ts`): a compact snapshot of
+  what the step could read, a diff of what it changed, and the prompts AI steps sent (system, context-rule block, user,
+  history turns, tools). Prompts are recorded before the call, so failed calls keep them. The data is redacted, stored
+  in `run_steps.debug_json` (migration 0012), sent on `step_completed`, dropped in zero-retention mode, and never
+  streamed to widget visitors (`isPublicEvent` in `apps/api/src/sse.ts`; before this, step events with raw outputs
+  reached the widget). `StepDebugger` (`components/editor/step-debugger.tsx`) shows it in the test console and on
+  Runs & Traces.
+- **Validation:** when errors block a test, the console lists them, and clicking one selects the node.
+- **Still open:** collapsible sections on every node type (only the Agent's output and tools so far), a node-card badge
+  for steps with debug data, and comparing two runs side by side.
+
 ## 4c. Deterministic context rules (branch `context-rules`)
 
 - **Engine:** `packages/expression-engine/src/context-rules.ts` (the `yaml` dependency). It provides

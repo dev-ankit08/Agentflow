@@ -1,5 +1,6 @@
 import type { Flow, NodeDef } from "@agentflow/flow-schema";
 import type { LLMGateway } from "@agentflow/llm-gateway";
+import { diffScope, snapshotScope, type StepDebug } from "./debug";
 import { handlers } from "./handlers";
 import { redactDeep } from "./redact";
 import type {
@@ -213,6 +214,9 @@ export class InProcessExecutor implements RunExecutor {
 
         let meta: StepMeta = {};
         let result: NodeResult;
+        const before = snapshotScope(state);
+        const debugOf = (): StepDebug =>
+          redactDeep({ before, changes: diffScope(before, snapshotScope(state)), prompts: meta.prompts }) as StepDebug;
         try {
           result = await this.runNode(node, {
             runId,
@@ -232,6 +236,7 @@ export class InProcessExecutor implements RunExecutor {
         } catch (error) {
           const message = (error as Error).message;
           const endedAt = new Date();
+          const debug = debugOf();
           await store.appendStep({
             runId,
             stepIndex,
@@ -241,6 +246,7 @@ export class InProcessExecutor implements RunExecutor {
             error: message,
             input: redactDeep(meta.input),
             promptRedacted: meta.promptRedacted,
+            debug,
             model: meta.model,
             startedAt,
             endedAt,
@@ -252,6 +258,7 @@ export class InProcessExecutor implements RunExecutor {
             status: "error",
             error: message,
             durationMs: endedAt.getTime() - startedAt.getTime(),
+            debug,
           });
           state.stepIndex++;
           state.turnSteps++;
@@ -275,6 +282,7 @@ export class InProcessExecutor implements RunExecutor {
         // Steps inside a Loop body are bounded by the Loop's own maxIterations instead.
         if (!Object.keys(state.loops ?? {}).length) state.turnSteps++;
         else state.loopSteps = (state.loopSteps ?? 0) + 1;
+        const debug = debugOf();
 
         await store.appendStep({
           runId,
@@ -285,6 +293,7 @@ export class InProcessExecutor implements RunExecutor {
           input: redactDeep(meta.input),
           output: redactDeep(output),
           promptRedacted: meta.promptRedacted,
+          debug,
           model: meta.model,
           tokensIn: meta.tokensIn,
           tokensOut: meta.tokensOut,
@@ -303,6 +312,7 @@ export class InProcessExecutor implements RunExecutor {
           tokensIn: meta.tokensIn,
           tokensOut: meta.tokensOut,
           costUsd: meta.costUsd,
+          debug,
         });
 
         if (result.kind === "pause") {

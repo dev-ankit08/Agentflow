@@ -85,6 +85,13 @@
       "when": 1793526638858,
       "tag": "0011_wakeful_sprite",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793542195163,
+      "tag": "0012_woozy_forgotten_one",
+      "breakpoints": true
     }
   ]
 }

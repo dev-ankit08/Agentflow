@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Badge, Button, cn } from "@agentflow/ui";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Badge, Button, InfoTip, Tooltip, cn } from "@agentflow/ui";
+import { StepDebugger, type StepDebug } from "./step-debugger";
 
 type Step = {
   stepIndex: number;
@@ -15,6 +16,8 @@ type Step = {
   handle?: string;
   tokensIn?: number;
   tokensOut?: number;
+  costUsd?: number;
+  debug?: StepDebug;
 };
 type Citation = { n: number; title: string; uri: string | null };
 type Line = { role: "user" | "bot" | "error" | "info"; text: string; citations?: Citation[] };
@@ -92,17 +95,31 @@ function FormCard({
   );
 }
 
+export type ConsoleLayout = { minimized: boolean; height: number; chat: boolean; timeline: boolean };
+
 export function TestConsole({
   flowId,
   prepare,
   onStatus,
   onClose,
+  layout,
+  onLayout,
+  issues,
+  onSelectNode,
+  focusNodeId,
 }: {
   flowId: string;
   /** Saves the draft and returns false if the flow has errors. */
   prepare: () => Promise<boolean>;
   onStatus: (statuses: Record<string, Step["status"]>) => void;
   onClose: () => void;
+  layout: ConsoleLayout;
+  onLayout: (patch: Partial<ConsoleLayout>) => void;
+  /** The flow's current errors, listed (and clickable) when they block a test. */
+  issues: { message: string; nodeId?: string }[];
+  onSelectNode: (nodeId: string) => void;
+  /** The node selected on the canvas; its latest step opens in the timeline. */
+  focusNodeId: string | null;
 }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState("");
@@ -115,6 +132,8 @@ export function TestConsole({
   const [showUser, setShowUser] = useState(false);
   const [form, setForm] = useState<FormUi | null>(null);
   const [awaitingApproval, setAwaitingApproval] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [prevFocus, setPrevFocus] = useState(focusNodeId);
   const scroller = useRef<HTMLDivElement>(null);
   const statuses = useRef<Record<string, Step["status"]>>({});
   const seenTurns = useRef(0);
@@ -177,9 +196,11 @@ export function TestConsole({
     setInput("");
     if (!runId && !(await prepare())) {
       setBusy(false);
-      setLines((l) => [...l, { role: "error", text: "Fix the flow's errors (red badges) before testing." }]);
+      setInput(message);
+      setBlocked(true);
       return;
     }
+    setBlocked(false);
     setLines((l) => [...l, { role: "user", text: override?.display ?? message }]);
     setForm(null);
     setSteps([]);
@@ -237,6 +258,8 @@ export function TestConsole({
                       handle: e.handle as string | undefined,
                       tokensIn: e.tokensIn as number | undefined,
                       tokensOut: e.tokensOut as number | undefined,
+                      costUsd: e.costUsd as number | undefined,
+                      debug: e.debug as StepDebug | undefined,
                     }
                   : st,
               ),
@@ -276,167 +299,283 @@ export function TestConsole({
     }
   }
 
+  // Selecting a node on the canvas opens its latest step (adjusting state during render, not in an effect).
+  if (focusNodeId !== prevFocus) {
+    setPrevFocus(focusNodeId);
+    const latest = [...steps].reverse().find((st) => st.nodeId === focusNodeId);
+    if (latest) setSelected(latest.stepIndex);
+  }
+
   const step = steps.find((s) => s.stepIndex === selected);
   const totalTokens = steps.reduce((t, s) => t + (s.tokensIn ?? 0) + (s.tokensOut ?? 0), 0);
+  const failed = steps.filter((s) => s.status === "error").length;
+  const summary = busy
+    ? "Running…"
+    : steps.length
+      ? `${steps.length} steps${failed ? ` · ${failed} failed` : ""}${totalTokens ? ` · ${totalTokens} tokens` : ""}`
+      : "";
+
+  const startResize = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = layout.height;
+    const move = (ev: PointerEvent) =>
+      onLayout({
+        height: Math.round(Math.min(Math.max(startHeight + startY - ev.clientY, 180), window.innerHeight * 0.75)),
+      });
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const paneToggle = (key: "chat" | "timeline", label: string) => (
+    <button
+      type="button"
+      aria-pressed={layout[key]}
+      disabled={layout[key] && !layout[key === "chat" ? "timeline" : "chat"]}
+      onClick={() => onLayout({ [key]: !layout[key] })}
+      className={cn(
+        "rounded-md px-2 py-0.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-60",
+        layout[key] ? "bg-accent-soft text-accent" : "text-muted hover:bg-surface-2 hover:text-text",
+      )}
+    >
+      {label}
+    </button>
+  );
 
   return (
-    <section aria-label="Test console" className="flex h-80 shrink-0 border-t border-border bg-surface">
-      <div className="flex w-[42%] min-w-[320px] flex-col border-r border-border">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <p className="text-xs font-semibold text-text">Test chat</p>
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowUser((s) => !s)}
-              title="Simulate a signed-in end user"
-            >
-              {"{{user}}"}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={reset} disabled={busy}>
-              New chat
-            </Button>
-          </div>
-        </div>
-        {showUser && (
-          <textarea
-            aria-label="Test user traits (JSON)"
-            value={userJson}
-            onChange={(e) => setUserJson(e.target.value)}
-            rows={3}
-            className="border-b border-border bg-surface-2 px-3 py-2 font-mono text-[11px] text-text focus:outline-none"
-          />
+    <section
+      aria-label="Test console"
+      className="relative flex shrink-0 flex-col border-t border-border bg-surface"
+      style={layout.minimized ? undefined : { height: layout.height }}
+    >
+      {!layout.minimized && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize test console"
+          onPointerDown={startResize}
+          className="absolute inset-x-0 -top-1 z-10 h-2 cursor-row-resize hover:bg-accent/30"
+        />
+      )}
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
+        <p className="text-xs font-semibold text-text">Test console</p>
+        <InfoTip label="About the test console">
+          Runs the current draft (it is saved first). Steps light up on the canvas; select a step, or a node on the
+          canvas, to see the variables it saw, the exact prompt and context sent, and its output.
+        </InfoTip>
+        {summary && (
+          <span className={cn("text-[11px]", failed ? "text-danger" : "text-muted")} aria-live="polite">
+            {summary}
+          </span>
         )}
-        <div ref={scroller} className="flex-1 space-y-2 overflow-y-auto p-3" aria-live="polite">
-          {lines.length === 0 && !draft && (
-            <p className="text-xs text-muted">Send a message to run the current draft.</p>
+        <div className="ml-auto flex items-center gap-1">
+          {!layout.minimized && (
+            <>
+              {paneToggle("chat", "Chat")}
+              {paneToggle("timeline", "Timeline")}
+              <span className="mx-1 h-4 w-px bg-border" />
+            </>
           )}
-          {lines.map((l, i) => (
-            <div
-              key={i}
-              className={cn(
-                "max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-xs",
-                l.role === "user" && "ml-auto bg-accent text-accent-fg",
-                l.role === "bot" && "border border-border bg-surface-2 text-text",
-                l.role === "error" && "mx-auto bg-danger/10 text-danger",
-                l.role === "info" && "mx-auto bg-warning/10 text-warning",
-              )}
+          <Tooltip content={layout.minimized ? "Expand" : "Minimize (the run keeps going)"}>
+            <button
+              type="button"
+              aria-label={layout.minimized ? "Expand test console" : "Minimize test console"}
+              onClick={() => onLayout({ minimized: !layout.minimized })}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-text"
             >
-              {l.text}
-              {l.citations?.length ? (
-                <ol className="mt-2 space-y-0.5 border-t border-border pt-1.5 text-[10px] text-muted">
-                  {l.citations.map((c) => (
-                    <li key={c.n}>
-                      [{c.n}]{" "}
-                      {c.uri ? (
-                        <a href={c.uri} target="_blank" rel="noopener noreferrer" className="underline">
-                          {c.title}
-                        </a>
-                      ) : (
-                        c.title
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-            </div>
-          ))}
-          {draft && (
-            <div className="max-w-[85%] whitespace-pre-wrap rounded-xl border border-dashed border-border px-3 py-2 text-xs text-muted">
-              {draft}
-            </div>
-          )}
-          {form && (
-            <FormCard
-              form={form}
-              disabled={busy}
-              onSubmit={(values) =>
-                void send({ message: JSON.stringify(values), display: Object.values(values).join(", ") })
-              }
-            />
-          )}
+              {layout.minimized ? "▴" : "▾"}
+            </button>
+          </Tooltip>
+          <Tooltip content="Close (clears the run)">
+            <button
+              type="button"
+              aria-label="Close test console"
+              onClick={onClose}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-text"
+            >
+              ×
+            </button>
+          </Tooltip>
         </div>
-        <form
-          className="flex gap-2 border-t border-border p-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <label htmlFor="test-input" className="sr-only">
-            Test message
-          </label>
-          <input
-            id="test-input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={runId ? "Reply…" : "Try: Where is my order 1042?"}
-            className="h-9 flex-1 rounded-lg border border-border bg-surface px-3 text-xs text-text focus:border-accent focus:outline-none"
-          />
-          <Button type="submit" size="sm" disabled={busy || !input.trim()}>
-            {busy ? "Running…" : "Send"}
-          </Button>
-        </form>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <p className="text-xs font-semibold text-text">
-            Timeline {totalTokens ? <span className="font-normal text-muted">· {totalTokens} tokens</span> : null}
-          </p>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close test console">
-            ×
-          </Button>
-        </div>
-        <div className="flex min-h-0 flex-1">
-          <ol className="w-56 shrink-0 overflow-y-auto border-r border-border p-2">
-            {steps.map((s) => (
-              <li key={s.stepIndex}>
-                <button
-                  type="button"
-                  onClick={() => setSelected(s.stepIndex)}
+      <div className={cn("min-h-0 flex-1", layout.minimized ? "hidden" : "flex")}>
+        {layout.chat && (
+          <div
+            className={cn("flex flex-col border-border", layout.timeline ? "w-[38%] min-w-[300px] border-r" : "flex-1")}
+          >
+            <div className="flex items-center justify-between border-b border-border px-3 py-1">
+              <p className="text-[11px] font-medium text-muted">Chat</p>
+              <div className="flex gap-1">
+                <Tooltip content="Simulate a signed-in end user ({{user.*}})">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="!h-6 !px-2 !text-[11px]"
+                    onClick={() => setShowUser((v) => !v)}
+                  >
+                    {"{{user}}"}
+                  </Button>
+                </Tooltip>
+                <Button variant="ghost" size="sm" className="!h-6 !px-2 !text-[11px]" onClick={reset} disabled={busy}>
+                  New chat
+                </Button>
+              </div>
+            </div>
+            {showUser && (
+              <textarea
+                aria-label="Test user traits (JSON)"
+                value={userJson}
+                onChange={(e) => setUserJson(e.target.value)}
+                rows={3}
+                className="border-b border-border bg-surface-2 px-3 py-2 font-mono text-[11px] text-text focus:outline-none"
+              />
+            )}
+            <div ref={scroller} className="flex-1 space-y-2 overflow-y-auto p-3" aria-live="polite">
+              {lines.length === 0 && !draft && !blocked && (
+                <p className="text-xs text-muted">Send a message to run the current draft.</p>
+              )}
+              {blocked && issues.length > 0 && (
+                <div role="alert" className="rounded-lg border border-danger/30 bg-danger/10 p-2 text-xs">
+                  <p className="mb-1 font-medium text-danger">Fix these before testing (click one to go to it):</p>
+                  <ul className="space-y-0.5">
+                    {issues.map((i, k) => (
+                      <li key={k}>
+                        <button
+                          type="button"
+                          disabled={!i.nodeId}
+                          onClick={() => i.nodeId && onSelectNode(i.nodeId)}
+                          className="text-left text-text hover:underline disabled:no-underline"
+                        >
+                          ✕ {i.message}
+                          {i.nodeId && <span className="text-muted"> · {i.nodeId}</span>}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {lines.map((l, i) => (
+                <div
+                  key={i}
                   className={cn(
-                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-surface-2",
-                    selected === s.stepIndex && "bg-accent-soft",
+                    "max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-xs",
+                    l.role === "user" && "ml-auto bg-accent text-accent-fg",
+                    l.role === "bot" && "border border-border bg-surface-2 text-text",
+                    l.role === "error" && "mx-auto bg-danger/10 text-danger",
+                    l.role === "info" && "mx-auto bg-warning/10 text-warning",
                   )}
                 >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span
-                      className={cn(
-                        s.status === "ok" && "text-success",
-                        s.status === "error" && "text-danger",
-                        s.status === "running" && "text-warning",
-                      )}
-                    >
-                      {s.status === "ok" ? "✓" : s.status === "error" ? "✕" : "…"}
-                    </span>
-                    <span className="truncate text-text">{s.label}</span>
-                    {s.handle && <Badge className="!px-1 !py-0 !text-[9px]">{s.handle}</Badge>}
-                  </span>
-                  {s.durationMs !== undefined && (
-                    <span className="shrink-0 text-[10px] text-muted">{s.durationMs} ms</span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ol>
-          <div className="min-w-0 flex-1 overflow-auto p-3">
-            {step ? (
-              <>
-                <p className="mb-2 text-xs text-muted">
-                  {step.label} <code className="font-mono">({step.nodeId})</code>
-                  {step.tokensIn !== undefined && ` · ${step.tokensIn} in / ${step.tokensOut} out tokens`}
-                </p>
-                {step.error && <p className="mb-2 text-xs text-danger">{step.error}</p>}
-                <pre className="whitespace-pre-wrap break-words rounded-lg bg-surface-2 p-3 font-mono text-[11px] text-text">
-                  {JSON.stringify(step.output ?? null, null, 2)}
-                </pre>
-              </>
-            ) : (
-              <p className="text-xs text-muted">Select a step to see its output and the variables it produced.</p>
-            )}
+                  {l.text}
+                  {l.citations?.length ? (
+                    <ol className="mt-2 space-y-0.5 border-t border-border pt-1.5 text-[10px] text-muted">
+                      {l.citations.map((c) => (
+                        <li key={c.n}>
+                          [{c.n}]{" "}
+                          {c.uri ? (
+                            <a href={c.uri} target="_blank" rel="noopener noreferrer" className="underline">
+                              {c.title}
+                            </a>
+                          ) : (
+                            c.title
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                </div>
+              ))}
+              {draft && (
+                <div className="max-w-[85%] whitespace-pre-wrap rounded-xl border border-dashed border-border px-3 py-2 text-xs text-muted">
+                  {draft}
+                </div>
+              )}
+              {form && (
+                <FormCard
+                  form={form}
+                  disabled={busy}
+                  onSubmit={(values) =>
+                    void send({ message: JSON.stringify(values), display: Object.values(values).join(", ") })
+                  }
+                />
+              )}
+            </div>
+            <form
+              className="flex gap-2 border-t border-border p-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send();
+              }}
+            >
+              <label htmlFor="test-input" className="sr-only">
+                Test message
+              </label>
+              <input
+                id="test-input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={runId ? "Reply…" : "Try: Where is my order 1042?"}
+                className="h-9 flex-1 rounded-lg border border-border bg-surface px-3 text-xs text-text focus:border-accent focus:outline-none"
+              />
+              <Button type="submit" size="sm" disabled={busy || !input.trim()}>
+                {busy ? "Running…" : "Send"}
+              </Button>
+            </form>
           </div>
-        </div>
+        )}
+
+        {layout.timeline && (
+          <div className="flex min-w-0 flex-1">
+            <ol className="w-56 shrink-0 overflow-y-auto border-r border-border p-2" aria-label="Steps">
+              {steps.length === 0 && (
+                <li className="px-2 py-1.5 text-[11px] text-muted">Steps appear here as the flow runs.</li>
+              )}
+              {steps.map((s) => (
+                <li key={s.stepIndex}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(s.stepIndex)}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-surface-2",
+                      selected === s.stepIndex && "bg-accent-soft",
+                    )}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        className={cn(
+                          s.status === "ok" && "text-success",
+                          s.status === "error" && "text-danger",
+                          s.status === "running" && "text-warning",
+                        )}
+                      >
+                        {s.status === "ok" ? "✓" : s.status === "error" ? "✕" : "…"}
+                      </span>
+                      <span className="truncate text-text">{s.label}</span>
+                      {s.handle && <Badge className="!px-1 !py-0 !text-[9px]">{s.handle}</Badge>}
+                    </span>
+                    {s.durationMs !== undefined && (
+                      <span className="shrink-0 text-[10px] text-muted">{s.durationMs} ms</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ol>
+            <div className="min-w-0 flex-1 overflow-auto p-3">
+              {step ? (
+                <StepDebugger step={step} />
+              ) : (
+                <p className="text-xs text-muted">
+                  Select a step (or a node on the canvas) to see the variables it saw, the prompt and context it sent,
+                  and its output.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

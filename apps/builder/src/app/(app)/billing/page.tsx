@@ -26,7 +26,7 @@ export default async function BillingPage({
 
   return (
     <>
-      <PageHeader title="Billing" description={`${current.orgName} · plans are per organization`} />
+      <PageHeader title="Billing" subtitle={`${current.orgName} · plans are per organization`} />
       <Flash error={error} ok={ok} />
       {!b.configured && (
         <div className="mb-6">
