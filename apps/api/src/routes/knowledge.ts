@@ -6,7 +6,7 @@ import { chunks, documents, knowledgeSources, type Db } from "@agentflow/db";
 import { HttpError, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
 import { assertPublicUrl } from "../services";
-import { searchKnowledge } from "../workspace-services";
+import { indexKnowledge, indexStatus, searchKnowledge } from "../semantic";
 
 const MAX_CHARS = 500_000;
 
@@ -103,7 +103,14 @@ const AddSource = z.discriminatedUnion("type", [
 ]);
 
 /** Knowledge sources agents can answer from (H7). */
-export async function knowledgeRoutes(app: FastifyInstance, { db, auth, config }: Deps) {
+export async function knowledgeRoutes(app: FastifyInstance, { db, auth, config, gatewayFor }: Deps) {
+  /** Indexes new passages right away when an embedding model is set; failures leave them for the background sweep. */
+  const indexNow = (workspaceId: string) =>
+    indexKnowledge(db, gatewayFor(workspaceId), workspaceId).catch((err) => {
+      app.log.warn({ err, workspaceId }, "knowledge indexing failed");
+      return null;
+    });
+
   const find = async (workspaceId: string, id: string) => {
     const [row] = await db
       .select()
@@ -151,6 +158,7 @@ export async function knowledgeRoutes(app: FastifyInstance, { db, auth, config }
         text: body.type === "text" ? body.content : page!.text,
       });
       await db.update(knowledgeSources).set({ lastSyncedAt: new Date() }).where(eq(knowledgeSources.id, source!.id));
+      await indexNow(ws.id);
       return reply.code(201).send({ id: source!.id, name, chunks: result.chunks });
     } catch (error) {
       await db.delete(knowledgeSources).where(eq(knowledgeSources.id, source!.id));
@@ -173,6 +181,7 @@ export async function knowledgeRoutes(app: FastifyInstance, { db, auth, config }
           .update(knowledgeSources)
           .set({ status: "ready", error: null, lastSyncedAt: new Date() })
           .where(eq(knowledgeSources.id, source.id));
+        if (result.changed) await indexNow(ws.id);
         return result;
       } catch (error) {
         await db
@@ -201,6 +210,21 @@ export async function knowledgeRoutes(app: FastifyInstance, { db, auth, config }
     const { query, topK } = z
       .object({ query: z.string().trim().min(1).max(500), topK: z.number().int().min(1).max(10).default(4) })
       .parse(req.body);
-    return { results: await searchKnowledge(db, currentWorkspace(req).id, query, { sources: [], topK }) };
+    const ws = currentWorkspace(req);
+    return { results: await searchKnowledge(db, ws.id, query, { sources: [], topK }, gatewayFor(ws.id)) };
+  });
+
+  app.get("/knowledge/index", { preHandler: auth.requireWorkspace("viewer") }, async (req) =>
+    indexStatus(db, currentWorkspace(req).id),
+  );
+
+  /** Indexes everything still pending (in batches) and reports progress. */
+  app.post("/knowledge/index", { preHandler: auth.requireWorkspace("admin") }, async (req) => {
+    const ws = currentWorkspace(req);
+    let result = await indexKnowledge(db, gatewayFor(ws.id), ws.id);
+    for (let i = 0; i < 20 && result.indexed && result.remaining; i++) {
+      result = await indexKnowledge(db, gatewayFor(ws.id), ws.id);
+    }
+    return { ...(await indexStatus(db, ws.id)), remaining: result.remaining };
   });
 }

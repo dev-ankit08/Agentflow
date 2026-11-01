@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import { and, eq, sql } from "drizzle-orm";
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { ZodError } from "zod";
-import { connectors, type Db } from "@agentflow/db";
+import { connectors, workspaces, type Db } from "@agentflow/db";
 import type { LLMGateway, Price } from "@agentflow/llm-gateway";
 import { McpConnectionPool } from "@agentflow/mcp-client";
 import { DbRunStore, InProcessExecutor, type RunExecutor, type RunStore } from "@agentflow/runtime";
@@ -30,6 +30,7 @@ import { knowledgeRoutes } from "./routes/knowledge";
 import { makeGatewayFor, makeGuardedFetch, makeToolsFor } from "./services";
 import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredApprovals } from "./workspace-services";
 import { applyRetention, resumeDueTimers, runSchedules } from "./automation";
+import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
 import { auditHook, governanceRoutes } from "./routes/governance";
 
@@ -106,7 +107,13 @@ export async function buildApp(opts: AppOptions) {
   const fetchImpl = makeGuardedFetch(Boolean(opts.allowPrivateHttp));
   const executor =
     opts.executor ??
-    new InProcessExecutor({ store, gatewayFor, toolsFor, servicesFor: makeServicesFor(opts.db), fetch: fetchImpl });
+    new InProcessExecutor({
+      store,
+      gatewayFor,
+      toolsFor,
+      servicesFor: makeServicesFor(opts.db, gatewayFor),
+      fetch: fetchImpl,
+    });
   // Eval runs: same flows, but write tools are simulated and nothing reaches the inbox.
   const toolMode = (workspaceId: string) => async (ref: string) => {
     const [connectorId, tool] = ref.split("/");
@@ -120,7 +127,7 @@ export async function buildApp(opts: AppOptions) {
     store,
     gatewayFor,
     toolsFor: (ws) => sandboxTools(toolsFor(ws), toolMode(ws)),
-    servicesFor: makeSandboxServicesFor(opts.db),
+    servicesFor: makeSandboxServicesFor(opts.db, gatewayFor),
     fetch: fetchImpl,
   });
   const billing = makeBilling(opts.db, opts.stripe ?? null);
@@ -170,6 +177,17 @@ export async function buildApp(opts: AppOptions) {
     await sweepExpiredApprovals(opts.db, executor).catch((err) => app.log.error({ err }, "approval sweep failed"));
     await resumeDueTimers(opts.db, executor).catch((err) => app.log.error({ err }, "timer sweep failed"));
     await runSchedules(opts.db, executor).catch((err) => app.log.error({ err }, "schedule sweep failed"));
+    // Knowledge added or re-synced since the last sweep, or a new embedding model, gets indexed in the background.
+    const embedding = await opts.db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(sql`${workspaces.settings} ? 'embedding'`)
+      .catch(() => []);
+    for (const ws of embedding) {
+      await indexKnowledge(opts.db, gatewayFor(ws.id), ws.id).catch((err) =>
+        app.log.warn({ err, workspaceId: ws.id }, "knowledge indexing failed"),
+      );
+    }
     if (Date.now() - lastRetention > 3_600_000) {
       lastRetention = Date.now();
       await applyRetention(opts.db).catch((err) => app.log.error({ err }, "retention sweep failed"));

@@ -4,7 +4,7 @@ import { apiFetch } from "@/lib/api";
 import { can, requireWorkspace } from "@/lib/context";
 import { addProviderKey, cancelInvite, changeRole, deleteProviderKey, inviteMember, removeMember } from "../../actions";
 import { saveWorkspaceSettings } from "../../actions-phase2";
-import { deleteEndUser, saveRetention } from "../../actions-phase3";
+import { deleteEndUser, indexKnowledgeNow, saveEmbedding, saveRetention } from "../../actions-phase3";
 
 type WsSettings = {
   settings: {
@@ -14,6 +14,14 @@ type WsSettings = {
   };
   usage: { usd: number; tokens: number };
   defaults: { roi: { costPerConversation: number; minutesPerConversation: number } };
+};
+
+type IndexStatus = { model: { provider: string; name: string } | null; total: number; indexed: number };
+
+const embeddingProviders: Record<string, { label: string; model: string }> = {
+  openai: { label: "OpenAI", model: "text-embedding-3-small" },
+  azure_openai: { label: "Azure OpenAI", model: "your-embedding-deployment" },
+  openai_compatible: { label: "OpenAI-compatible (Ollama, vLLM, mock)", model: "mock-embed" },
 };
 
 type EndUser = {
@@ -54,6 +62,7 @@ export default async function SettingsPage({
       ? await apiFetch<EndUser>(`/v1/end-users/${encodeURIComponent(endUserQuery.trim())}`, { workspaceId: current.id })
       : null;
   const retention = wsSettings.settings.retention ?? {};
+  const index = await apiFetch<IndexStatus>("/v1/knowledge/index", { workspaceId: current.id });
 
   return (
     <>
@@ -269,6 +278,63 @@ export default async function SettingsPage({
                 </div>
               )}
             </form>
+          </CardBody>
+        </Card>
+
+        <Card id="semantic">
+          <CardHeader
+            title="Semantic knowledge search"
+            description="Find passages by meaning, not just matching words. Knowledge nodes blend both kinds of match."
+          />
+          <CardBody className="space-y-4">
+            <form action={saveEmbedding} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+              <Field label="Embedding provider" htmlFor="emb-provider" hint="Uses that provider's key from Model keys.">
+                <Select
+                  id="emb-provider"
+                  name="provider"
+                  defaultValue={index.model?.provider ?? ""}
+                  disabled={!isAdmin}
+                >
+                  <option value="">Off (word matching only)</option>
+                  {Object.entries(embeddingProviders).map(([id, p]) => (
+                    <option key={id} value={id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                label="Embedding model"
+                htmlFor="emb-name"
+                hint="e.g. text-embedding-3-small, nomic-embed-text, mock-embed"
+              >
+                <Input
+                  id="emb-name"
+                  name="name"
+                  defaultValue={index.model?.name ?? ""}
+                  placeholder={embeddingProviders.openai!.model}
+                  disabled={!isAdmin}
+                />
+              </Field>
+              {isAdmin && <Button type="submit">Save</Button>}
+            </form>
+            {index.model && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-surface-2 px-4 py-3 text-sm">
+                <span className="text-text">
+                  {index.indexed} of {index.total} passages indexed
+                  {index.indexed < index.total && (
+                    <span className="text-muted"> · the rest are indexed in the background within a minute</span>
+                  )}
+                </span>
+                {isAdmin && index.indexed < index.total && (
+                  <form action={indexKnowledgeNow}>
+                    <Button type="submit" size="sm" variant="secondary">
+                      Index now
+                    </Button>
+                  </form>
+                )}
+              </div>
+            )}
           </CardBody>
         </Card>
 

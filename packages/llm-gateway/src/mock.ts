@@ -67,9 +67,36 @@ export function mockReply(body: { messages: Msg[]; tools?: Tool[]; response_form
   };
 }
 
+/**
+ * Deterministic stand-in for an embedding model: hashed word stems in a fixed number of dimensions,
+ * normalised to unit length. Texts sharing words land close together, which is enough for tests and demos.
+ */
+export function mockEmbedding(text: string, dims = 256): number[] {
+  const v = new Array<number>(dims).fill(0);
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .map((w) => w.replace(/(ing|ed|es|s)$/, "").slice(0, 6));
+  for (const w of words) {
+    let h = 2166136261;
+    for (let i = 0; i < w.length; i++) h = Math.imul(h ^ w.charCodeAt(i), 16777619);
+    v[Math.abs(h) % dims]! += 1;
+  }
+  const norm = Math.hypot(...v) || 1;
+  return v.map((x) => x / norm);
+}
+
 /** The mock model as an in-process provider (no HTTP), for tests. */
 export const mockProvider: LLMProvider = {
   id: "openai_compatible",
+  async embed(req) {
+    return {
+      vectors: req.input.map((t) => mockEmbedding(t)),
+      usage: { inputTokens: req.input.length, outputTokens: 0 },
+    };
+  },
   async chat(req, _creds, onToken) {
     const reply = mockReply({
       messages: req.messages.map((m) => ({

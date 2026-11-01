@@ -15,6 +15,13 @@ const WorkspaceSettingsBody = z.object({
   retention: z
     .object({ days: z.number().int().min(1).max(3650).optional(), zeroRetention: z.boolean().optional() })
     .optional(),
+  embedding: z
+    .object({
+      provider: z.enum(["openai", "azure_openai", "openai_compatible"]),
+      name: z.string().trim().min(1).max(200),
+    })
+    .nullable()
+    .optional(),
 });
 
 const FlowSettingsBody = z.object({
@@ -139,6 +146,7 @@ export async function analyticsRoutes(app: FastifyInstance, { db, auth }: Deps) 
     if ("budget" in body) settings.budget = body.budget ?? undefined;
     if ("roi" in body) settings.roi = body.roi;
     if ("retention" in body) settings.retention = body.retention;
+    if ("embedding" in body) settings.embedding = body.embedding ?? undefined;
     await db.update(workspaces).set({ settings }).where(eq(workspaces.id, ws.id));
     return { settings };
   });

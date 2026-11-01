@@ -334,6 +334,41 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect((await call(owner.id, "GET", `/v1/flows/${flowId}/ab-test`)).json().abTest).toBeNull();
   });
 
+  it("indexes knowledge with the embedding model and searches it semantically", async () => {
+    const before = (await call(owner.id, "GET", "/v1/knowledge/index")).json();
+    expect(before.model).toBeNull();
+
+    expect(
+      (
+        await call(owner.id, "PUT", "/v1/workspace/settings", {
+          embedding: { provider: "openai_compatible", name: "mock-embed" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const added = await call(owner.id, "POST", "/v1/knowledge", {
+      type: "text",
+      name: "Warranty",
+      content:
+        "Every backpack carries a lifetime warranty against manufacturing defects.\n\nTents are covered for two years.",
+    });
+    expect(added.statusCode).toBe(201);
+
+    // New passages are indexed straight away.
+    const status = (await call(owner.id, "GET", "/v1/knowledge/index")).json();
+    expect(status).toMatchObject({ model: { provider: "openai_compatible", name: "mock-embed" } });
+    expect(status.indexed).toBe(status.total);
+    expect(status.total).toBeGreaterThan(0);
+
+    const hits = (await call(owner.id, "POST", "/v1/knowledge/search", { query: "backpack warranty", topK: 2 })).json();
+    expect(hits.results[0].text).toContain("lifetime warranty");
+
+    // A model that can't embed falls back to full-text search instead of failing.
+    await call(owner.id, "PUT", "/v1/workspace/settings", { embedding: { provider: "openai", name: "no-key" } });
+    const fallback = (await call(owner.id, "POST", "/v1/knowledge/search", { query: "backpack warranty" })).json();
+    expect(fallback.results[0].text).toContain("lifetime warranty");
+    await call(owner.id, "PUT", "/v1/workspace/settings", { embedding: null });
+  });
+
   it("supports presence, node comments and edit-conflict protection", async () => {
     const flowId = await makeFlow("Collab", ...echoFlow("Hi"));
     await call(owner.id, "POST", `/v1/flows/${flowId}/presence`, { nodeId: "end" });

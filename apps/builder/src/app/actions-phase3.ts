@@ -71,3 +71,17 @@ export async function promoteAbTest(form: FormData) {
     "The challenger is now the live version",
   );
 }
+
+export async function saveEmbedding(form: FormData) {
+  const provider = field(form, "provider");
+  const name = field(form, "name");
+  await attempt(
+    "/settings",
+    () => call("/v1/workspace/settings", "PUT", { embedding: provider && name ? { provider, name } : null }),
+    provider && name ? "Embedding model saved; your knowledge is being indexed" : "Semantic search turned off",
+  );
+}
+
+export async function indexKnowledgeNow() {
+  await attempt("/settings", () => call("/v1/knowledge/index", "POST"), "Knowledge indexed");
+}

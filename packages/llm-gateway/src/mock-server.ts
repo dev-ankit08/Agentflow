@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mockReply } from "./mock";
+import { mockEmbedding, mockReply } from "./mock";
 
 /**
  * OpenAI-compatible HTTP server for the mock model (streaming chat completions).
@@ -9,7 +9,28 @@ export function startMockLlm(port: number, { delayMs = 15 } = {}): Promise<Serve
   const server = createServer(async (req, res) => {
     if (req.method === "GET" && req.url?.endsWith("/models")) {
       res.writeHead(200, { "content-type": "application/json" });
-      return res.end(JSON.stringify({ data: [{ id: "mock-1", object: "model" }] }));
+      return res.end(
+        JSON.stringify({
+          data: [
+            { id: "mock-1", object: "model" },
+            { id: "mock-embed", object: "model" },
+          ],
+        }),
+      );
+    }
+    if (req.method === "POST" && req.url?.endsWith("/embeddings")) {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const { input } = JSON.parse(raw) as { input: string | string[] };
+      const texts = Array.isArray(input) ? input : [input];
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          object: "list",
+          data: texts.map((t, index) => ({ object: "embedding", index, embedding: mockEmbedding(t) })),
+          usage: { prompt_tokens: Math.ceil(raw.length / 4), total_tokens: Math.ceil(raw.length / 4) },
+        }),
+      );
     }
     if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) {
       res.writeHead(404);

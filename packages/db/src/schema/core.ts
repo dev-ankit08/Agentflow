@@ -13,6 +13,8 @@ export type WorkspaceSettings = {
   roi?: { costPerConversation: number; minutesPerConversation: number };
   /** Data retention (H6): delete runs after `days`; zeroRetention keeps no prompts, outputs or transcripts. */
   retention?: { days?: number; zeroRetention?: boolean };
+  /** Embedding model for semantic knowledge search (H7); full-text search only when unset. */
+  embedding?: { provider: "openai" | "azure_openai" | "openai_compatible"; name: string };
 };
 
 const createdAt = () => timestamp("created_at", { mode: "date", withTimezone: true }).defaultNow().notNull();

@@ -113,14 +113,23 @@ Estimates are rough engineering days for this codebase.
 
 ### P1 — Finish partly built Phase 2–3 items (~10–14 days)
 
-4. **Semantic retrieval (K-1/K-2 gap).** Knowledge search is full-text only (`searchKnowledge` in
-   `apps/api/src/workspace-services.ts`).
-   1. Add an `Embedder` interface to the llm-gateway (OpenAI/Azure/Bedrock/Vertex embeddings, plus a mock).
-   2. Add an embedding column. Embedded Postgres has no pgvector, so either store `real[]` and compute cosine
-      similarity in SQL/JS for the prototype, or switch to pgvector when Docker is available.
-   3. Make search hybrid (blend of full-text rank and cosine score).
-   4. Reuse the same embedder for **insights clustering** (IN-1 currently clusters by keyword in `clusterQuestions`)
-      and for the **semantic cache** (C-3).
+4. **Semantic retrieval (K-1/K-2) — done** on branch `e2e-and-leftovers`.
+   - Gateway: `LLMGateway.embed()`, batches of 64, with embeddings for OpenAI, Azure OpenAI, OpenAI-compatible
+     servers and the mock model (`mock-embed`, also served by the mock server at `/v1/embeddings`).
+   - DB: `chunks.embedding` (`real[]`) and `chunks.embedding_model` (migration 0007). The workspace setting is
+     `settings.embedding`.
+   - `apps/api/src/semantic.ts` holds `indexKnowledge`, `indexStatus` and hybrid `searchKnowledge`. Search fuses
+     full-text and cosine rankings with reciprocal rank fusion (vectors are compared in the API process), and falls
+     back to full-text if embedding fails.
+   - New passages are indexed on add and re-sync, and the API background sweep indexes anything pending (e.g. after
+     the model changes).
+   - Settings → "Semantic knowledge search" picks the model and shows progress, with an "Index now" button.
+   - API: `GET` and `POST /v1/knowledge/index`.
+   - **Still open:**
+     - Bedrock and Vertex embeddings.
+     - pgvector for large knowledge bases.
+     - Reusing the embedder for insights clustering (IN-1, still keyword-based in `clusterQuestions`) and for the
+       semantic cache (C-3).
 5. **Memory background extraction (MEM-1).**
    1. After a chat run ends or goes idle (e.g. 30 min after the last message), extract facts with a model and call
       `memoryService.write`.

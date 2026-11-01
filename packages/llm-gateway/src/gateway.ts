@@ -82,6 +82,29 @@ export class LLMGateway {
     }
   }
 
+  /** Embeds texts in batches. Throws if the provider has no embeddings API. */
+  async embed(model: ModelRef, input: string[], signal?: AbortSignal): Promise<number[][]> {
+    const provider = this.providers[model.provider];
+    if (!provider.embed) throw new ProviderError(`${model.provider} does not offer embeddings`);
+    const creds = await this.opts.resolveCredentials(model.provider);
+    if (!creds) throw new ProviderError(`No API key configured for ${model.provider}. Add one in Settings.`);
+    const out: number[][] = [];
+    for (let i = 0; i < input.length; i += 64) {
+      const batch = input.slice(i, i + 64);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const res = await provider.embed({ model: model.name, input: batch, signal }, creds);
+          out.push(...res.vectors);
+          break;
+        } catch (error) {
+          if (!(error instanceof ProviderError && error.retryable) || attempt >= this.retries) throw error;
+          await this.sleep(500 * 2 ** attempt);
+        }
+      }
+    }
+    return out;
+  }
+
   private async chatWithModel(model: ModelRef, req: Omit<ChatRequest, "model">, options: ChatOptions) {
     const provider = this.providers[model.provider];
     const creds = await this.opts.resolveCredentials(model.provider);
