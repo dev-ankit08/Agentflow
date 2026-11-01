@@ -1,0 +1,67 @@
+/* AgentFlow design tokens. Components use the Tailwind colour names below (bg-surface, text-muted, …). */
+@theme inline {
+  --color-bg: var(--af-bg);
+  --color-surface: var(--af-surface);
+  --color-surface-2: var(--af-surface-2);
+  --color-border: var(--af-border);
+  --color-text: var(--af-text);
+  --color-muted: var(--af-muted);
+  --color-accent: var(--af-accent);
+  --color-accent-fg: var(--af-accent-fg);
+  --color-accent-soft: var(--af-accent-soft);
+  --color-danger: var(--af-danger);
+  --color-success: var(--af-success);
+  --color-warning: var(--af-warning);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Menlo, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --af-bg: #f6f6f8;
+  --af-surface: #ffffff;
+  --af-surface-2: #f0f0f4;
+  --af-border: #e2e2e8;
+  --af-text: #18181b;
+  --af-muted: #6b6b76;
+  --af-accent: #5b5bd6;
+  --af-accent-fg: #ffffff;
+  --af-accent-soft: #ededfc;
+  --af-danger: #d93f3f;
+  --af-success: #1f9d55;
+  --af-warning: #b7791f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --af-bg: #111114;
+    --af-surface: #18181c;
+    --af-surface-2: #222228;
+    --af-border: #2e2e36;
+    --af-text: #ededf0;
+    --af-muted: #9a9aa6;
+    --af-accent: #7b7bf0;
+    --af-accent-fg: #ffffff;
+    --af-accent-soft: #26264a;
+    --af-danger: #f06262;
+    --af-success: #3ccb7f;
+    --af-warning: #e0a94a;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --af-bg: #111114;
+  --af-surface: #18181c;
+  --af-surface-2: #222228;
+  --af-border: #2e2e36;
+  --af-text: #ededf0;
+  --af-muted: #9a9aa6;
+  --af-accent: #7b7bf0;
+  --af-accent-fg: #ffffff;
+  --af-accent-soft: #26264a;
+  --af-danger: #f06262;
+  --af-success: #3ccb7f;
+  --af-warning: #e0a94a;
+}

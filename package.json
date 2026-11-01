@@ -1,0 +1,42 @@
+{
+  "name": "agentflow",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:start": "pnpm --filter @agentflow/db db:start",
+    "db:generate": "pnpm --filter @agentflow/db db:generate",
+    "db:migrate": "pnpm --filter @agentflow/db db:migrate",
+    "db:seed": "pnpm --filter @agentflow/db db:seed",
+    "demo": "turbo run demo --parallel"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.15.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.0.0",
+    "pnpm": "9.15.0",
+    "prettier": "^3.6.2",
+    "turbo": "^2.11.10",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "embedded-postgres",
+      "@embedded-postgres/windows-x64"
+    ]
+  }
+}

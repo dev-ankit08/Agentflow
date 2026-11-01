@@ -1,0 +1,242 @@
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import cors from "@fastify/cors";
+import { and, eq, sql } from "drizzle-orm";
+import Fastify, { type FastifyServerOptions } from "fastify";
+import { ZodError } from "zod";
+import { connectors, type Db } from "@agentflow/db";
+import type { LLMGateway, Price } from "@agentflow/llm-gateway";
+import { McpConnectionPool } from "@agentflow/mcp-client";
+import { DbRunStore, InProcessExecutor, type RunExecutor, type RunStore } from "@agentflow/runtime";
+import type { SecretStore } from "@agentflow/secret-store";
+import { HttpError, makeAuth, type Auth } from "./auth";
+import { accountRoutes } from "./routes/account";
+import { connectorRoutes } from "./routes/connectors";
+import { flowRoutes } from "./routes/flows";
+import { memberRoutes } from "./routes/members";
+import { providerKeyRoutes } from "./routes/provider-keys";
+import { publishRoutes } from "./routes/publish";
+import { runRoutes } from "./routes/runs";
+import { templateRoutes } from "./routes/templates";
+import { widgetRoutes } from "./routes/widget";
+import { makeBilling, type Billing, type StripeConfig } from "./billing";
+import { defaultEndpoints, makeChannels, type ChannelEndpoints, type Channels } from "./channels";
+import { analyticsRoutes } from "./routes/analytics";
+import { billingRoutes } from "./routes/billing";
+import { channelRoutes } from "./routes/channel-routes";
+import { evalRoutes } from "./routes/evals";
+import { inboxRoutes } from "./routes/inbox";
+import { knowledgeRoutes } from "./routes/knowledge";
+import { makeGatewayFor, makeGuardedFetch, makeToolsFor } from "./services";
+import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredApprovals } from "./workspace-services";
+import { applyRetention, resumeDueTimers, runSchedules } from "./automation";
+import { automationRoutes, hookRoutes } from "./routes/automation-routes";
+import { auditHook, governanceRoutes } from "./routes/governance";
+
+function widgetScriptPath(): string | null {
+  let dir = process.cwd();
+  for (;;) {
+    const candidate = resolve(dir, "packages/widget/dist/widget.js");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+export type RuntimeConfig = {
+  API_JWT_SECRET: string;
+  allowStdioMcp: boolean;
+  allowPrivateHttp: boolean;
+  /** Public base URL of this API, shown as the webhook address for channels and Stripe. */
+  publicApiUrl: string;
+  /** Tests: process channel messages before answering the webhook. */
+  syncChannels: boolean;
+};
+
+export type Deps = {
+  db: Db;
+  auth: Auth;
+  secrets: SecretStore;
+  pool: McpConnectionPool;
+  store: RunStore;
+  executor: RunExecutor;
+  evalExecutor: RunExecutor;
+  gatewayFor: (workspaceId: string) => LLMGateway;
+  channels: Channels;
+  channelEndpoints: ChannelEndpoints;
+  billing: Billing;
+  config: RuntimeConfig;
+};
+
+export type AppOptions = {
+  db: Db;
+  secrets: SecretStore;
+  jwtSecret: string;
+  corsOrigin: string;
+  prices?: Record<string, Price>;
+  allowStdioMcp?: boolean;
+  allowPrivateHttp?: boolean;
+  /** Overrides for tests (e.g. a mock model provider). */
+  executor?: RunExecutor;
+  /** How often background work runs: expired approvals, due timers, schedules, retention (0 disables; tests). */
+  sweepIntervalMs?: number;
+  publicApiUrl?: string;
+  /** Overrides for Slack/WhatsApp/Teams API addresses and Bot Framework keys (tests). */
+  channelEndpoints?: Partial<ChannelEndpoints>;
+  syncChannels?: boolean;
+  /** Stripe billing; omitted when STRIPE_SECRET_KEY is not set. */
+  stripe?: StripeConfig | null;
+  logger?: FastifyServerOptions["logger"];
+};
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Shared services, exposed for background jobs and tests. */
+    deps: Deps;
+  }
+}
+
+export async function buildApp(opts: AppOptions) {
+  const app = Fastify({ logger: opts.logger ?? false });
+  const pool = new McpConnectionPool();
+  const store = new DbRunStore(opts.db);
+  const gatewayFor = makeGatewayFor(opts.db, opts.secrets, opts.prices ?? {});
+  const toolsFor = makeToolsFor(opts.db, opts.secrets, pool);
+  const fetchImpl = makeGuardedFetch(Boolean(opts.allowPrivateHttp));
+  const executor =
+    opts.executor ??
+    new InProcessExecutor({ store, gatewayFor, toolsFor, servicesFor: makeServicesFor(opts.db), fetch: fetchImpl });
+  // Eval runs: same flows, but write tools are simulated and nothing reaches the inbox.
+  const toolMode = (workspaceId: string) => async (ref: string) => {
+    const [connectorId, tool] = ref.split("/");
+    const [row] = await opts.db
+      .select({ catalog: connectors.toolCatalog })
+      .from(connectors)
+      .where(and(eq(connectors.id, connectorId ?? ""), eq(connectors.workspaceId, workspaceId)));
+    return row?.catalog.find((t) => t.name === tool)?.mode;
+  };
+  const evalExecutor = new InProcessExecutor({
+    store,
+    gatewayFor,
+    toolsFor: (ws) => sandboxTools(toolsFor(ws), toolMode(ws)),
+    servicesFor: makeSandboxServicesFor(opts.db),
+    fetch: fetchImpl,
+  });
+  const billing = makeBilling(opts.db, opts.stripe ?? null);
+  const channelEndpoints = { ...defaultEndpoints(), ...opts.channelEndpoints };
+  const channels = makeChannels({
+    db: opts.db,
+    secrets: opts.secrets,
+    executor,
+    store,
+    endpoints: channelEndpoints,
+    log: (msg, err) => app.log.error({ err }, msg),
+    beforeNewRun: (workspaceId) => billing.checkConversationLimit(workspaceId),
+  });
+  const deps: Deps = {
+    db: opts.db,
+    secrets: opts.secrets,
+    auth: makeAuth(opts.db, opts.jwtSecret),
+    pool,
+    store,
+    executor,
+    evalExecutor,
+    gatewayFor,
+    channels,
+    channelEndpoints,
+    billing,
+    config: {
+      API_JWT_SECRET: opts.jwtSecret,
+      allowStdioMcp: Boolean(opts.allowStdioMcp),
+      allowPrivateHttp: Boolean(opts.allowPrivateHttp),
+      publicApiUrl: (opts.publicApiUrl ?? "http://localhost:4000").replace(/\/+$/, ""),
+      syncChannels: Boolean(opts.syncChannels),
+    },
+  };
+  app.decorate("deps", deps);
+
+  // The builder origin gets credentialed CORS; widget endpoints accept any origin and check it per widget.
+  await app.register(cors, {
+    delegator: (req, cb) => {
+      const widget = req.url?.startsWith("/v1/widget/");
+      cb(null, widget ? { origin: true, credentials: false } : { origin: opts.corsOrigin, credentials: true });
+    },
+  });
+  // Background work: approvals past their deadline take their "timeout" path, Wait nodes whose time has
+  // come continue, schedules fire, and old data is removed per the workspace's retention settings.
+  let lastRetention = 0;
+  const sweep = async () => {
+    await sweepExpiredApprovals(opts.db, executor).catch((err) => app.log.error({ err }, "approval sweep failed"));
+    await resumeDueTimers(opts.db, executor).catch((err) => app.log.error({ err }, "timer sweep failed"));
+    await runSchedules(opts.db, executor).catch((err) => app.log.error({ err }, "schedule sweep failed"));
+    if (Date.now() - lastRetention > 3_600_000) {
+      lastRetention = Date.now();
+      await applyRetention(opts.db).catch((err) => app.log.error({ err }, "retention sweep failed"));
+    }
+  };
+  const sweeper = opts.sweepIntervalMs === 0 ? null : setInterval(() => void sweep(), opts.sweepIntervalMs ?? 20_000);
+  sweeper?.unref();
+  app.addHook("onClose", async () => {
+    if (sweeper) clearInterval(sweeper);
+    await pool.closeAll();
+  });
+
+  app.setErrorHandler((error, req, reply) => {
+    if (error instanceof ZodError) {
+      return reply.code(400).send({
+        error: "Invalid request",
+        issues: error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+      });
+    }
+    if (error instanceof HttpError) return reply.code(error.statusCode).send({ error: error.message });
+    const status = (error as { statusCode?: number }).statusCode;
+    if (status && status < 500) return reply.code(status).send({ error: (error as Error).message });
+    req.log.error(error);
+    return reply.code(500).send({ error: "Internal server error" });
+  });
+
+  // The embeddable widget script (built by packages/widget).
+  app.get("/widget.js", async (_req, reply) => {
+    const file = widgetScriptPath();
+    if (!file)
+      return reply.code(404).send("// AgentFlow widget is not built yet: run pnpm --filter @agentflow/widget build");
+    return reply
+      .header("content-type", "application/javascript; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .header("access-control-allow-origin", "*")
+      .send(readFileSync(file));
+  });
+
+  app.get("/health", async () => {
+    await opts.db.execute(sql`select 1`);
+    return { ok: true };
+  });
+
+  await app.register(
+    async (v1) => {
+      v1.addHook("onResponse", auditHook(opts.db));
+      await v1.register((s) => accountRoutes(s, deps));
+      await v1.register((s) => memberRoutes(s, deps));
+      await v1.register((s) => providerKeyRoutes(s, deps));
+      await v1.register((s) => flowRoutes(s, deps));
+      await v1.register((s) => publishRoutes(s, deps));
+      await v1.register((s) => runRoutes(s, deps));
+      await v1.register((s) => connectorRoutes(s, deps));
+      await v1.register((s) => templateRoutes(s, deps));
+      await v1.register((s) => widgetRoutes(s, deps));
+      await v1.register((s) => knowledgeRoutes(s, deps));
+      await v1.register((s) => inboxRoutes(s, deps));
+      await v1.register((s) => evalRoutes(s, deps));
+      await v1.register((s) => analyticsRoutes(s, deps));
+      await v1.register((s) => channelRoutes(s, deps));
+      await v1.register((s) => billingRoutes(s, deps));
+      await v1.register((s) => governanceRoutes(s, deps));
+      await v1.register((s) => automationRoutes(s, deps));
+      await v1.register((s) => hookRoutes(s, deps));
+    },
+    { prefix: "/v1" },
+  );
+
+  return app;
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@agentflow/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint src scripts",
+    "typecheck": "tsc -p tsconfig.json",
+    "db:start": "tsx scripts/dev-server.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts"
+  },
+  "dependencies": {
+    "@agentflow/flow-schema": "workspace:*",
+    "@agentflow/secret-store": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11",
+    "embedded-postgres": "17.11.0-beta.19",
+    "tsx": "^4.20.6"
+  }
+}

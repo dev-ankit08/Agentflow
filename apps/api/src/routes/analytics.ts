@@ -1,0 +1,165 @@
+import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { feedback, flows, runSteps, runs, workspaces, type WorkspaceSettings } from "@agentflow/db";
+import { HttpError, currentWorkspace } from "../auth";
+import type { Deps } from "../app";
+import { monthUsage } from "../workspace-services";
+
+const WorkspaceSettingsBody = z.object({
+  budget: z
+    .object({ monthlyUsd: z.number().positive().optional(), monthlyTokens: z.number().int().positive().optional() })
+    .nullable()
+    .optional(),
+  roi: z.object({ costPerConversation: z.number().min(0), minutesPerConversation: z.number().min(0) }).optional(),
+  retention: z
+    .object({ days: z.number().int().min(1).max(3650).optional(), zeroRetention: z.boolean().optional() })
+    .optional(),
+});
+
+const FlowSettingsBody = z.object({
+  publishGate: z.object({ enabled: z.boolean(), minPassRate: z.number().min(0).max(1) }).optional(),
+  requireReview: z.boolean().optional(),
+});
+
+const DEFAULT_ROI = { costPerConversation: 6, minutesPerConversation: 8 };
+
+/** ROI dashboard (H4), workspace budget and baseline settings (H11), per-flow publish rules. */
+export async function analyticsRoutes(app: FastifyInstance, { db, auth }: Deps) {
+  app.get<{ Querystring: { days?: string } }>(
+    "/analytics",
+    { preHandler: auth.requireWorkspace("viewer") },
+    async (req) => {
+      const ws = currentWorkspace(req);
+      const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
+      const since = new Date(Date.now() - days * 86_400_000);
+      // Published (live) conversations only: test-console and eval runs are excluded.
+      const live = and(
+        eq(runs.workspaceId, ws.id),
+        gte(runs.startedAt, since),
+        eq(runs.sandbox, false),
+        isNotNull(runs.flowVersionId),
+      );
+      const outcome = sql<string | null>`${runs.state}->>'outcome'`;
+
+      const [totals] = await db
+        .select({
+          runs: sql<number>`count(*)::int`,
+          resolved: sql<number>`count(*) filter (where ${outcome} = 'resolved')::int`,
+          escalated: sql<number>`count(*) filter (where ${outcome} = 'escalated')::int`,
+          converted: sql<number>`count(*) filter (where ${outcome} = 'converted')::int`,
+          failed: sql<number>`count(*) filter (where ${outcome} = 'failed')::int`,
+          aiCostUsd: sql<string>`coalesce(sum(${runs.costUsd}), 0)`,
+        })
+        .from(runs)
+        .where(live);
+      const [tokens] = await db
+        .select({
+          n: sql<number>`coalesce(sum(coalesce(${runSteps.tokensIn},0) + coalesce(${runSteps.tokensOut},0)), 0)::bigint`,
+        })
+        .from(runSteps)
+        .innerJoin(runs, eq(runs.id, runSteps.runId))
+        .where(live);
+      const [csat] = await db
+        .select({ avg: sql<number | null>`avg(${feedback.rating})::float`, count: sql<number>`count(*)::int` })
+        .from(feedback)
+        .innerJoin(runs, eq(runs.id, feedback.runId))
+        .where(live);
+      const daily = await db
+        .select({
+          day: sql<string>`to_char(date_trunc('day', ${runs.startedAt}), 'YYYY-MM-DD')`,
+          runs: sql<number>`count(*)::int`,
+          resolved: sql<number>`count(*) filter (where ${outcome} in ('resolved','converted'))::int`,
+        })
+        .from(runs)
+        .where(live)
+        .groupBy(sql`1`)
+        .orderBy(sql`1`);
+      const byFlow = await db
+        .select({
+          flowId: flows.id,
+          name: flows.name,
+          runs: sql<number>`count(*)::int`,
+          resolved: sql<number>`count(*) filter (where ${outcome} in ('resolved','converted'))::int`,
+          escalated: sql<number>`count(*) filter (where ${outcome} = 'escalated')::int`,
+        })
+        .from(runs)
+        .innerJoin(flows, eq(flows.id, runs.flowId))
+        .where(live)
+        .groupBy(flows.id, flows.name)
+        .orderBy(sql`count(*) desc`);
+
+      const [wsRow] = await db
+        .select({ settings: workspaces.settings })
+        .from(workspaces)
+        .where(eq(workspaces.id, ws.id));
+      const baseline = wsRow?.settings.roi ?? DEFAULT_ROI;
+      const t = totals!;
+      const withOutcome = t.resolved + t.escalated + t.converted + t.failed;
+      const automated = t.resolved + t.converted;
+      const aiCostUsd = Number(t.aiCostUsd);
+      return {
+        days,
+        totals: {
+          runs: t.runs,
+          resolved: t.resolved,
+          escalated: t.escalated,
+          converted: t.converted,
+          failed: t.failed,
+          resolutionRate: withOutcome ? automated / withOutcome : null,
+          tokens: Number(tokens?.n ?? 0),
+          aiCostUsd,
+          csat: csat?.avg ?? null,
+          feedbackCount: csat?.count ?? 0,
+        },
+        roi: {
+          baseline,
+          baselineIsDefault: !wsRow?.settings.roi,
+          hoursSaved: (automated * baseline.minutesPerConversation) / 60,
+          grossSavingsUsd: automated * baseline.costPerConversation,
+          netSavingsUsd: automated * baseline.costPerConversation - aiCostUsd,
+        },
+        daily,
+        byFlow,
+      };
+    },
+  );
+
+  app.get("/workspace/settings", { preHandler: auth.requireWorkspace("viewer") }, async (req) => {
+    const ws = currentWorkspace(req);
+    const [row] = await db.select({ settings: workspaces.settings }).from(workspaces).where(eq(workspaces.id, ws.id));
+    return { settings: row?.settings ?? {}, usage: await monthUsage(db, ws.id), defaults: { roi: DEFAULT_ROI } };
+  });
+
+  app.put("/workspace/settings", { preHandler: auth.requireWorkspace("admin") }, async (req) => {
+    const body = WorkspaceSettingsBody.parse(req.body);
+    const ws = currentWorkspace(req);
+    const [row] = await db.select({ settings: workspaces.settings }).from(workspaces).where(eq(workspaces.id, ws.id));
+    const settings: WorkspaceSettings = { ...row?.settings };
+    if ("budget" in body) settings.budget = body.budget ?? undefined;
+    if ("roi" in body) settings.roi = body.roi;
+    if ("retention" in body) settings.retention = body.retention;
+    await db.update(workspaces).set({ settings }).where(eq(workspaces.id, ws.id));
+    return { settings };
+  });
+
+  app.put<{ Params: { id: string } }>(
+    "/flows/:id/settings",
+    { preHandler: auth.requireWorkspace("admin") },
+    async (req) => {
+      const body = FlowSettingsBody.parse(req.body);
+      const ws = currentWorkspace(req);
+      const [flow] = await db
+        .select({ settings: flows.settings })
+        .from(flows)
+        .where(and(eq(flows.id, req.params.id), eq(flows.workspaceId, ws.id)));
+      if (!flow) throw new HttpError(404, "Flow not found");
+      const settings = { ...flow.settings, ...body };
+      await db
+        .update(flows)
+        .set({ settings })
+        .where(and(eq(flows.id, req.params.id), eq(flows.workspaceId, ws.id)));
+      return { publishGate: settings.publishGate ?? null, requireReview: Boolean(settings.requireReview) };
+    },
+  );
+}

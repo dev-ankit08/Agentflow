@@ -1,0 +1,24 @@
+{
+  "name": "@agentflow/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint src test",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agentflow/db": "workspace:*",
+    "@agentflow/expression-engine": "workspace:*",
+    "@agentflow/flow-schema": "workspace:*",
+    "@agentflow/llm-gateway": "workspace:*",
+    "drizzle-orm": "^0.45.4"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@agentflow/mcp-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./demo-server": "./src/demo-server.ts"
+  },
+  "scripts": {
+    "lint": "eslint src test scripts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "demo": "tsx scripts/demo-orders-server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.7"
+  }
+}

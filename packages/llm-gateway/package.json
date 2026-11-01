@@ -1,0 +1,23 @@
+{
+  "name": "@agentflow/llm-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mock-server": "./src/mock-server.ts"
+  },
+  "scripts": {
+    "lint": "eslint src test scripts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "demo": "tsx scripts/mock-llm.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "jose": "^6.2.14"
+  }
+}

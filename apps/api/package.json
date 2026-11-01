@@ -1,0 +1,35 @@
+{
+  "name": "@agentflow/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch-path=src --watch-path=../../packages --import tsx src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "lint": "eslint src test",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agentflow/db": "workspace:*",
+    "@agentflow/flow-schema": "workspace:*",
+    "@agentflow/llm-gateway": "workspace:*",
+    "@agentflow/mcp-client": "workspace:*",
+    "@agentflow/runtime": "workspace:*",
+    "@agentflow/secret-store": "workspace:*",
+    "@agentflow/templates": "workspace:*",
+    "@fastify/cors": "^11.3.1",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.7",
+    "jose": "^6.2.14",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.7",
+    "@agentflow/widget": "workspace:*"
+  }
+}

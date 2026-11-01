@@ -1,0 +1,1 @@
+ALTER TABLE "channel_threads" ADD COLUMN "meta" jsonb DEFAULT '{}'::jsonb NOT NULL;
