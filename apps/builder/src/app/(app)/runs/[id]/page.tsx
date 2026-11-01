@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, CardBody, CardHeader, PageHeader, Select } from "@agentflow/ui";
+import { StepDebugger, type StepDebug } from "@/components/editor/step-debugger";
 import { Flash } from "@/components/flash";
 import { ApiError, apiFetch } from "@/lib/api";
 import { can, requireWorkspace } from "@/lib/context";
@@ -16,6 +17,7 @@ type Step = {
   inputJson: unknown;
   outputJson: unknown;
   promptRedacted: string | null;
+  debugJson: StepDebug | null;
   model: string | null;
   tokensIn: number | null;
   tokensOut: number | null;
@@ -71,7 +73,7 @@ export default async function RunPage({
       </Link>
       <PageHeader
         title={run.flowName}
-        description={`${run.flowVersionId ? "Live" : "Test"} run · ${new Date(run.startedAt).toLocaleString()} · ${run.steps.length} steps · ${tokens} tokens${cost ? ` · $${cost.toFixed(4)}` : ""}${run.endUserId ? ` · user ${run.endUserId}` : ""}`}
+        subtitle={`${run.flowVersionId ? "Live" : "Test"} run · ${new Date(run.startedAt).toLocaleString()} · ${run.steps.length} steps · ${tokens} tokens${cost ? ` · $${cost.toFixed(4)}` : ""}${run.endUserId ? ` · user ${run.endUserId}` : ""}`}
         action={
           <div className="flex items-center gap-2">
             {run.state.outcome && <Badge tone={outcomeTone(run.state.outcome)}>{run.state.outcome}</Badge>}
@@ -124,7 +126,10 @@ export default async function RunPage({
         </Card>
 
         <Card>
-          <CardHeader title="Trace" description="Prompts are stored with personal data redacted." />
+          <CardHeader
+            title="Trace"
+            description="Open a step to see the values it saw, what it changed, the exact prompt and context it sent, and its output. Personal data is redacted."
+          />
           <ol className="divide-y divide-border">
             {run.steps.map((s) => (
               <li key={s.id}>
@@ -144,8 +149,24 @@ export default async function RunPage({
                     </span>
                   </summary>
                   <div className="mt-3 space-y-2">
-                    {s.error && <p className="text-sm text-danger">{s.error}</p>}
-                    {s.promptRedacted && (
+                    <StepDebugger
+                      compact
+                      step={{
+                        nodeId: s.nodeId,
+                        label: labels.get(s.nodeId) ?? s.nodeId,
+                        nodeType: s.nodeType,
+                        status: s.status,
+                        durationMs: ms(s),
+                        output: s.outputJson,
+                        error: s.error,
+                        tokensIn: s.tokensIn,
+                        tokensOut: s.tokensOut,
+                        costUsd: s.costUsd != null ? Number(s.costUsd) : null,
+                        model: s.model,
+                        debug: s.debugJson,
+                      }}
+                    />
+                    {!s.debugJson && s.promptRedacted && (
                       <div>
                         <p className="mb-1 text-xs font-medium text-muted">Prompt sent</p>
                         <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-3 font-mono text-[11px] text-text">
@@ -161,12 +182,6 @@ export default async function RunPage({
                         </pre>
                       </div>
                     )}
-                    <div>
-                      <p className="mb-1 text-xs font-medium text-muted">Output</p>
-                      <pre className="max-h-64 overflow-auto rounded-lg bg-surface-2 p-3 font-mono text-[11px] text-text">
-                        {JSON.stringify(s.outputJson, null, 2)}
-                      </pre>
-                    </div>
                   </div>
                 </details>
               </li>

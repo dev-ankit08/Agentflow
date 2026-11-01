@@ -2,6 +2,7 @@ import { evaluate, renderTemplate, toText } from "@agentflow/expression-engine";
 import type { ModelRef, NodeDef } from "@agentflow/flow-schema";
 import type { ChatMessage, LLMGateway, ToolDef } from "@agentflow/llm-gateway";
 import { withContext } from "./context";
+import type { PromptParts } from "./debug";
 import { untrusted } from "./guardrails";
 import { redactPII } from "./redact";
 import type { NodeContext, NodeHandler } from "./types";
@@ -103,6 +104,8 @@ const supervisor: NodeHandler<Of<"supervisor">> = {
     const usage: Usage = { tokensIn: 0, tokensOut: 0, cost: null };
     const supervisorContext = withContext(c.instructions, c.contextRules, scope);
     const workerTraces: Record<string, unknown> = {};
+    const prompts: PromptParts[] = [];
+    ctx.meta({ prompts });
     const roster = c.workers.map((w) => `- ${w.id}: ${w.description}`).join("\n");
     const messages: ChatMessage[] = [
       {
@@ -112,6 +115,14 @@ const supervisor: NodeHandler<Of<"supervisor">> = {
       ...ctx.state.conversation.slice(0, -1).map((t) => ({ role: t.role, content: t.content })),
       { role: "user", content: renderTemplate(c.task, scope) },
     ];
+    prompts.push({
+      label: "supervisor",
+      system: messages[0]!.content as string,
+      context: supervisorContext.context,
+      user: messages[messages.length - 1]!.content as string,
+      historyTurns: messages.length - 2,
+      tools: c.workers.map((w) => w.id),
+    });
     const tools: ToolDef[] = c.workers.map((w) => ({
       name: w.id,
       description: w.description,
@@ -122,9 +133,17 @@ const supervisor: NodeHandler<Of<"supervisor">> = {
       },
     }));
     const steps: { worker: string; task: string; result: string }[] = [];
-    const workerSystem = (worker: (typeof c.workers)[number]) => {
+    const workerSystem = (worker: (typeof c.workers)[number], task: string) => {
       const built = withContext(worker.systemPrompt, worker.contextRules, scope);
       if (built.trace) workerTraces[worker.id] = built.trace;
+      prompts.push({
+        label: `specialist: ${worker.id}`,
+        system: built.system,
+        context: built.context,
+        user: task,
+        historyTurns: 0,
+        tools: worker.tools?.length ? worker.tools : undefined,
+      });
       return built.system;
     };
 
@@ -165,7 +184,7 @@ const supervisor: NodeHandler<Of<"supervisor">> = {
             ctx,
             worker.model ?? c.model,
             [
-              { role: "system", content: workerSystem(worker) },
+              { role: "system", content: workerSystem(worker, task) },
               { role: "user", content: task },
             ],
             worker.tools ?? [],
@@ -223,18 +242,22 @@ const parallel: NodeHandler<Of<"parallel">> = {
     const scope = ctx.scope();
     const usage: Usage = { tokensIn: 0, tokensOut: 0, cost: null };
     const taskTraces: Record<string, unknown> = {};
-    const taskContext = (t: (typeof node.config.tasks)[number]) => {
+    const prompts: PromptParts[] = [];
+    ctx.meta({ prompts });
+    const taskContext = (t: (typeof node.config.tasks)[number], user: string) => {
       const built = withContext(t.systemPrompt, t.contextRules, scope);
       if (built.trace) taskTraces[t.id] = built.trace;
+      prompts.push({ label: `task: ${t.id}`, system: built.system, context: built.context, user, historyTurns: 0 });
       return built;
     };
     await ctx.services.checkBudget?.();
     const replies = await Promise.all(
       node.config.tasks.map(async (t) => {
+        const user = renderTemplate(t.userPrompt, scope);
         const res = await ctx.gateway.chat(t.model, {
           messages: [
-            { role: "system", content: taskContext(t).system },
-            { role: "user", content: renderTemplate(t.userPrompt, scope) },
+            { role: "system", content: taskContext(t, user).system },
+            { role: "user", content: user },
           ],
           maxTokens: 1024,
           signal: ctx.signal,

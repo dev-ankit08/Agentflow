@@ -127,7 +127,7 @@ export default async function VersionPage({
       </Link>
       <PageHeader
         title={`Version ${version.version}`}
-        description={`${previous ? `Changes since version ${previous.version}` : "First version"} · ${new Date(version.createdAt).toLocaleString()}`}
+        subtitle={`${previous ? `Changes since version ${previous.version}` : "First version"} · ${new Date(version.createdAt).toLocaleString()}`}
         action={<Badge>{version.status}</Badge>}
       />
       {others.length > 0 && (
@@ -153,7 +153,7 @@ export default async function VersionPage({
         <Card className="mb-6">
           <CardHeader
             title={`Prompt changes (${prompts.length})`}
-            description={
+            subtitle={
               previous
                 ? `Version ${previous.version} on the left, version ${version.version} on the right.`
                 : "New prompts in this version."

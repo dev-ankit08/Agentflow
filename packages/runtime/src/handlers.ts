@@ -22,10 +22,19 @@ const agent: NodeHandler<Of<"agent">> = {
     const c = node.config;
     const scope = ctx.scope();
     // Context rules decide, from variables, which context blocks this agent receives.
-    const { system, trace: contextTrace } = withContext(c.systemPrompt, c.contextRules, scope);
+    const { system, context, trace: contextTrace } = withContext(c.systemPrompt, c.contextRules, scope);
     const user = renderTemplate(c.userPrompt, scope);
     // Earlier turns of the conversation, so agents keep context in multi-turn chats.
     const history = ctx.state.conversation.slice(0, -1);
+    // Recorded up front so the debugger shows what was sent even if the call fails.
+    const prompt = {
+      system,
+      context,
+      user,
+      historyTurns: history.length,
+      tools: c.tools?.length ? c.tools : undefined,
+    };
+    ctx.meta({ prompts: [prompt] });
     const messages: ChatMessage[] = [
       ...(system ? [{ role: "system" as const, content: system }] : []),
       ...history.map((t) => ({ role: t.role, content: t.content })),
@@ -46,7 +55,13 @@ const agent: NodeHandler<Of<"agent">> = {
     const cached = cacheQuery ? await ctx.services.cache!.lookup(cacheQuery).catch(() => null) : null;
     if (cached) {
       if (!c.outputSchema) ctx.emit({ type: "token", nodeId: node.id, text: cached.text });
-      ctx.meta({ model: `cache (${cacheQuery!.model})`, tokensIn: 0, tokensOut: 0, costUsd: 0 });
+      ctx.meta({
+        model: `cache (${cacheQuery!.model})`,
+        tokensIn: 0,
+        tokensOut: 0,
+        costUsd: 0,
+        prompts: [{ ...prompt, cached: true }],
+      });
       return {
         kind: "next",
         output: {

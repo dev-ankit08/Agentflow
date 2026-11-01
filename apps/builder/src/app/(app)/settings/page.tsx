@@ -145,7 +145,7 @@ export default async function SettingsPage({
 
   return (
     <>
-      <PageHeader title="Settings" description={`${current.orgName} / ${current.name}`} />
+      <PageHeader title="Settings" subtitle={`${current.orgName} / ${current.name}`} />
       <Flash error={error} ok={ok} />
 
       <div className="space-y-6">
@@ -310,7 +310,7 @@ export default async function SettingsPage({
         <Card id="roi">
           <CardHeader
             title="Budget and ROI baseline"
-            description={`This month so far: ${wsSettings.usage.tokens.toLocaleString()} tokens · $${wsSettings.usage.usd.toFixed(2)} (live runs only).`}
+            subtitle={`This month so far: ${wsSettings.usage.tokens.toLocaleString()} tokens · $${wsSettings.usage.usd.toFixed(2)} (live runs only).`}
           />
           <CardBody>
             <form action={saveWorkspaceSettings} className="grid gap-3 sm:grid-cols-2">
@@ -410,7 +410,7 @@ export default async function SettingsPage({
         <Card id="reports">
           <CardHeader
             title="Weekly report"
-            description={`Email owners and admins a summary of the last 7 days: conversations, automation, hours and money saved.${reports?.lastSentAt ? ` Last sent ${new Date(reports.lastSentAt).toLocaleString()}.` : ""}`}
+            subtitle={`Email owners and admins a summary of the last 7 days: conversations, automation, hours and money saved.${reports?.lastSentAt ? ` Last sent ${new Date(reports.lastSentAt).toLocaleString()}.` : ""}`}
           />
           <CardBody className="space-y-3">
             <form action={saveReports} className="grid gap-3 sm:grid-cols-3">
@@ -466,7 +466,7 @@ export default async function SettingsPage({
         <Card id="cache">
           <CardHeader
             title="Response cache"
-            description={`Answer repeated questions instead of calling the model again: faster and free. ${wsSettings.cache.entries} cached answer${wsSettings.cache.entries === 1 ? "" : "s"}, reused ${wsSettings.cache.hits} time${wsSettings.cache.hits === 1 ? "" : "s"}.`}
+            subtitle={`Answer repeated questions instead of calling the model again: faster and free. ${wsSettings.cache.entries} cached answer${wsSettings.cache.entries === 1 ? "" : "s"}, reused ${wsSettings.cache.hits} time${wsSettings.cache.hits === 1 ? "" : "s"}.`}
           />
           <CardBody>
             <form action={saveCache} className="grid gap-3 sm:grid-cols-2">

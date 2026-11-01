@@ -97,7 +97,7 @@ export default async function PromptsPage({
             <Card key={p.id}>
               <CardHeader
                 title={p.name}
-                description={`${p.description ? `${p.description} · ` : ""}updated ${new Date(p.updatedAt).toLocaleDateString()}`}
+                subtitle={`${p.description ? `${p.description} · ` : ""}updated ${new Date(p.updatedAt).toLocaleDateString()}`}
               />
               <CardBody className="space-y-3">
                 <details>

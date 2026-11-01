@@ -27,6 +27,14 @@ export function openSse(reply: FastifyReply) {
   return { send, sendRaw, close };
 }
 
+/**
+ * Whether an event may go to end users (widget visitors). Step events carry node outputs, variables and prompts,
+ * which are for builders only.
+ */
+export function isPublicEvent(event: RunEvent) {
+  return event.type !== "step_started" && event.type !== "step_completed";
+}
+
 /** Runs `work` while streaming its events; always ends the stream, reporting failures as an error event. */
 export async function streamRun(reply: FastifyReply, work: (emit: (e: RunEvent) => void) => Promise<unknown>) {
   const sse = openSse(reply);

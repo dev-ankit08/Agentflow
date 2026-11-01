@@ -2,7 +2,7 @@
 
 import { approverRoles, formFieldTypes, type NodeDef } from "@agentflow/flow-schema";
 import { Button, Input, Select } from "@agentflow/ui";
-import { FormulaField, ListInput, Row, TemplateField } from "./fields";
+import { FormulaField, ListInput, Row, TemplateField, HowItWorks } from "./fields";
 import type { ConnectorSummary } from "./model";
 
 export type SourceSummary = { id: string; name: string };
@@ -139,9 +139,7 @@ export function ExtraFields({
               />
             </Row>
           </div>
-          <p className="text-[11px] text-muted">
-            Requests appear in the Inbox. Connect the approved, rejected and timeout outcomes.
-          </p>
+          <HowItWorks>Requests appear in the Inbox. Connect the approved, rejected and timeout outcomes.</HowItWorks>
         </>
       );
     }
@@ -201,9 +199,9 @@ export function ExtraFields({
               )}
             </div>
           </Row>
-          <p className="text-[11px] text-muted">
+          <HowItWorks>
             Handoffs appear in the Inbox with the transcript and a summary of the customer&apos;s messages.
-          </p>
+          </HowItWorks>
         </>
       );
     }
@@ -276,10 +274,10 @@ export function ExtraFields({
               </Select>
             </Row>
           </div>
-          <p className="text-[11px] text-muted">
+          <HowItWorks>
             Connect the pass and fail outcomes. The checked text is available as{" "}
             <code className="font-mono">{`{{${node.id}.text}}`}</code>.
-          </p>
+          </HowItWorks>
         </>
       );
     }
@@ -359,9 +357,9 @@ export function ExtraFields({
               )}
             </div>
           </Row>
-          <p className="text-[11px] text-muted">
+          <HowItWorks>
             The subflow&apos;s End output fields become <code className="font-mono">{`{{${node.id}.field}}`}</code>.
-          </p>
+          </HowItWorks>
         </>
       );
     }

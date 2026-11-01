@@ -7,7 +7,7 @@ import { feedback, flows } from "@agentflow/db";
 import { Flow } from "@agentflow/flow-schema";
 import { HttpError } from "../auth";
 import type { Deps } from "../app";
-import { openSse } from "../sse";
+import { isPublicEvent, openSse } from "../sse";
 import { widgetSettingsOf, type WidgetSettings } from "./publish";
 import { chooseVersion } from "../automation";
 
@@ -109,7 +109,7 @@ export async function widgetRoutes(app: FastifyInstance, { db, executor, store, 
           endUserId: typeof user.id === "string" ? user.id : null,
         },
         (event) => {
-          sse.send(event);
+          if (isPublicEvent(event)) sse.send(event);
           if (event.type === "run_started")
             sse.sendRaw("session", { runId: event.runId, sessionToken: sign(event.runId) });
         },
@@ -136,7 +136,7 @@ export async function widgetRoutes(app: FastifyInstance, { db, executor, store, 
     if (run.status !== "waiting_input") throw new HttpError(409, "This conversation has ended; please start a new one");
     const sse = openSse(reply);
     try {
-      await executor.sendMessage(run.id, body.message, sse.send);
+      await executor.sendMessage(run.id, body.message, (event) => isPublicEvent(event) && sse.send(event));
     } catch (error) {
       sse.send({ type: "error", message: (error as Error).message });
     } finally {

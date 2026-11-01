@@ -925,6 +925,23 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect((await call(builder.id, "GET", "/v1/audit")).statusCode).toBe(403);
   });
 
+  it("stores each step's debug data for the trace, without streaming step events to widget visitors", async () => {
+    const flowId = await makeFlow("Debug data", ...echoFlow("Hello"));
+    await publish(flowId);
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/widget/${widgetKey}/sessions`,
+      payload: { message: "hi" },
+    });
+    expect(res.body).toContain("Hello");
+    expect(res.body).not.toContain("step_");
+    const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+    const detail = (await call(owner.id, "GET", `/v1/runs/${runId}`)).json();
+    expect(detail.steps.length).toBeGreaterThan(0);
+    expect(detail.steps[0].debugJson).toMatchObject({ before: expect.any(Object), changes: expect.any(Array) });
+  });
+
   it("applies retention: old runs are deleted and zero retention keeps no transcripts", async () => {
     const flowId = await makeFlow("Retention", ...echoFlow("Hello"));
     await publish(flowId);
@@ -937,6 +954,9 @@ describe.skipIf(!url)("Phase 3 API", () => {
       payload: { message: "my card is 4111" },
     });
     const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+    const stored = await db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(stored.length).toBeGreaterThan(0);
+    expect(stored.every((s) => s.debugJson === null)).toBe(true);
     const steps = await app.deps.store.load(runId);
     expect(steps?.status).toBe("waiting_input");
     // A chat that started long ago but is still active is left alone; once idle for an hour it is scrubbed.

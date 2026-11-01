@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { checkContextRules, parseContextRules, renderContextRules } from "@agentflow/expression-engine";
-import { Button } from "@agentflow/ui";
+import { Button, InfoTip } from "@agentflow/ui";
 
 const EXAMPLE = `# Context rules: evaluated top to bottom from variables, no AI involved.
 # Only matching blocks are sent, at {{context}} in the prompt or in a "Context" section at the end.
@@ -80,14 +80,17 @@ export function ContextRulesField({
   return (
     <details className="rounded-lg border border-border p-2" open={Boolean(value.trim())}>
       <summary className="cursor-pointer text-xs font-medium text-text">
-        Context rules (YAML){ruleCount ? <span className="ml-1 text-muted">· {ruleCount} rules</span> : null}
+        Context rules (YAML){" "}
+        <span onClick={(e) => e.preventDefault()} className="inline-flex align-middle">
+          <InfoTip label="About context rules">
+            Decide from variables which context this AI step receives, without AI. Only matching blocks are sent, at{" "}
+            <code className="font-mono">{"{{context}}"}</code> in the prompt or at its end.
+          </InfoTip>
+        </span>
+        {ruleCount ? <span className="ml-1 text-muted">· {ruleCount} rules</span> : null}
         {issues.length ? <span className="ml-1 text-danger">· {issues.length} issue(s)</span> : null}
       </summary>
       <div className="mt-2 space-y-2">
-        <p className="text-[11px] text-muted">
-          Decide from variables which context this AI step receives. Only matching blocks are sent, at{" "}
-          <code className="font-mono">{"{{context}}"}</code> in the prompt or at its end.
-        </p>
         <textarea
           value={value}
           disabled={disabled}

@@ -1,5 +1,6 @@
 import type { Flow, NodeDef } from "@agentflow/flow-schema";
 import type { LLMGateway, ToolDef } from "@agentflow/llm-gateway";
+import type { PromptParts, StepDebug } from "./debug";
 
 export type RunStatus =
   "running" | "waiting_approval" | "waiting_input" | "waiting_timer" | "completed" | "failed" | "handed_off";
@@ -47,6 +48,8 @@ export type RunEvent =
       tokensIn?: number;
       tokensOut?: number;
       costUsd?: number | null;
+      /** Variables before the step, what it changed and the prompts it sent (PII-redacted). */
+      debug?: StepDebug;
     }
   | { type: "message"; role: "assistant"; content: string; citations?: Citation[] }
   | { type: "paused"; reason: PauseReason; ui?: FormUi; resumeAt?: string }
@@ -63,6 +66,7 @@ export type StepRecord = {
   input?: unknown;
   output?: unknown;
   promptRedacted?: string;
+  debug?: StepDebug;
   model?: string;
   tokensIn?: number;
   tokensOut?: number;
@@ -150,6 +154,8 @@ export type RunChild = (flowId: string, useDraft: boolean, input: Record<string,
 export type StepMeta = {
   input?: unknown;
   promptRedacted?: string;
+  /** The AI calls this step made, as assembled (system, context-rule block, user message). */
+  prompts?: PromptParts[];
   model?: string;
   tokensIn?: number;
   tokensOut?: number;

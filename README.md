@@ -51,6 +51,13 @@ and tested against local fakes, but **not yet against the real services** — se
     YAML rules (`when`/`else`, `switch`/`cases`, `first`, `title`). They are evaluated from variables without
     AI, so only the matching context reaches the model. The editor checks rules as you type and previews the exact
     context for sample values, and each run records which rules matched.
+25. **Debug every step**: in the test console (select a step, or click a node after a run) and on Runs & Traces, see
+    the values a step could read, what it changed, the exact system prompt, context-rule block and user message it
+    sent, which rules matched, and its output, tokens and cost. Stored with personal data redacted, never sent to
+    widget visitors, and skipped in zero-retention mode.
+26. **Room to work**: collapse the node palette, the properties panel, the test console and the app sidebar (or press
+    `\` for focus mode); resize the console; search nodes. Help text sits in ⓘ tooltips; press `?` for keyboard
+    shortcuts.
 
 ## Packages
 
