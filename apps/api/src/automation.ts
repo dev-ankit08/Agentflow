@@ -51,7 +51,7 @@ export async function audit(
 export function memoryService(db: Db, workspaceId: string): NonNullable<RuntimeServices["memory"]> {
   return {
     async read(endUserId, query, topK) {
-      const tsq = sql`to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', ${query})), ' | '))`;
+      const tsq = orQuery(query);
       const ranked = await db
         .select({ fact: memories.fact })
         .from(memories)
@@ -102,6 +102,25 @@ export async function chooseVersion(db: Db, flow: typeof flows.$inferSelect, ran
 
 // --- Background work ----------------------------------------------------------------------
 
+/** Starts a run without waiting for it to finish; resolves with its id once it has started (null on failure). */
+function startInBackground(executor: RunExecutor, input: Parameters<RunExecutor["start"]>[0]) {
+  return new Promise<string | null>((resolve) => {
+    executor
+      .start(input, (e) => {
+        if (e.type === "run_started") resolve(e.runId);
+      })
+      .then((id) => resolve(id))
+      .catch(() => resolve(null));
+  });
+}
+
+/**
+ * A full-text OR query from free text: each lexeme is quoted, so punctuation in the input (e.g. URLs with ":")
+ * can't break the query syntax.
+ */
+export const orQuery = (text: string) =>
+  sql`to_tsquery('english', coalesce((select string_agg(quote_literal(l), ' | ') from unnest(tsvector_to_array(to_tsvector('english', ${text}))) as l), ''))`;
+
 /** Starts live flows whose schedule matches this minute (UTC). Returns the run ids started. */
 export async function runSchedules(db: Db, executor: RunExecutor, now = new Date()) {
   const minute = new Date(now);
@@ -121,26 +140,27 @@ export async function runSchedules(db: Db, executor: RunExecutor, now = new Date
     } catch {
       continue;
     }
-    const last = automationOf(flow.settings).scheduleState?.lastRunAt;
-    if (!matches || (last && new Date(last) >= minute)) continue;
-    await db
+    if (!matches) continue;
+    // Claim this minute atomically (and touch only scheduleState), so overlapping sweeps or instances fire once.
+    const iso = minute.toISOString();
+    const claimed = await db
       .update(flows)
-      .set({ settings: { ...flow.settings, scheduleState: { lastRunAt: minute.toISOString() } } })
-      .where(eq(flows.id, flow.id));
+      .set({
+        settings: sql`jsonb_set(${flows.settings}, '{scheduleState}', jsonb_build_object('lastRunAt', ${iso}::text))`,
+      })
+      .where(and(eq(flows.id, flow.id), sql`coalesce(${flows.settings}->'scheduleState'->>'lastRunAt', '') < ${iso}`))
+      .returning({ id: flows.id });
+    if (!claimed.length) continue;
     const input = (schedule.config?.input as Record<string, unknown> | undefined) ?? {};
-    const runId = await executor
-      .start(
-        {
-          workspaceId: flow.workspaceId,
-          flowId: flow.id,
-          flowVersionId: versionId,
-          flow: Flow.parse(json),
-          triggerType: "schedule",
-          input: { ...input, scheduledAt: minute.toISOString() },
-        },
-        () => {},
-      )
-      .catch(() => null);
+    // Runs continue in the background so one slow flow doesn't delay the others.
+    const runId = await startInBackground(executor, {
+      workspaceId: flow.workspaceId,
+      flowId: flow.id,
+      flowVersionId: versionId,
+      flow: Flow.parse(json),
+      triggerType: "schedule",
+      input: { ...input, scheduledAt: iso },
+    });
     if (runId) started.push(runId);
   }
   return started;
@@ -163,8 +183,17 @@ export async function resumeDueTimers(db: Db, executor: RunExecutor, now = new D
       .where(and(eq(runs.id, run.id), eq(runs.status, "waiting_timer")))
       .returning({ id: runs.id });
     if (!claimed.length) continue;
-    await executor.resume(run.id, { output: { waited: true } }, () => {}).catch(() => {});
     resumed++;
+    void executor
+      .resume(run.id, { output: { waited: true } }, () => {})
+      .catch(async () => {
+        // Failed before the run moved on: put it back so the next sweep retries instead of leaving it "running".
+        await db
+          .update(runs)
+          .set({ status: "waiting_timer" })
+          .where(and(eq(runs.id, run.id), eq(runs.status, "running"), sql`${runs.state}->'paused'->>'reason' = 'wait'`))
+          .catch(() => {});
+      });
   }
   return resumed;
 }
@@ -194,7 +223,8 @@ export async function applyRetention(db: Db, now = new Date()) {
           and(
             eq(runs.workspaceId, ws.id),
             inArray(runs.status, ["waiting_input", "completed", "failed", "handed_off"]),
-            lt(runs.startedAt, idle),
+            // Idle means no step for an hour, not an hour since the chat started.
+            sql`coalesce((select max(${runSteps.endedAt}) from ${runSteps} where ${runSteps.runId} = ${runs.id}), ${runs.startedAt}) < ${idle.toISOString()}::timestamptz`,
             sql`jsonb_array_length(coalesce(${runs.state}->'conversation', '[]'::jsonb)) > 0`,
           ),
         );
@@ -231,6 +261,8 @@ export async function extractMemories(
   let stored = 0;
   for (const ws of enabled) {
     const cfg = ws.settings.memoryExtraction!;
+    // Zero retention keeps nothing derived from conversations either.
+    if (ws.settings.retention?.zeroRetention) continue;
     try {
       await checkBudget(ws.id);
     } catch {
@@ -265,7 +297,11 @@ export async function extractMemories(
       } catch {
         // A failing model is retried only when the conversation continues, so a bad key can't loop every sweep.
       }
-      await db.update(runs).set({ memoryExtractedAt: now }).where(eq(runs.id, run.id));
+      // Mark up to the last step processed, so a reply that arrives meanwhile is picked up next time.
+      await db
+        .update(runs)
+        .set({ memoryExtractedAt: sql`coalesce(${lastActivity}, now())` })
+        .where(eq(runs.id, run.id));
     }
   }
   return { processed, stored };

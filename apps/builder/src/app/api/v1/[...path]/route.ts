@@ -18,6 +18,9 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
   if (!token) return Response.json({ error: "Not signed in" }, { status: 401 });
 
   const { path } = await params;
+  // Only API paths under /v1: dot segments would let the URL climb out of it.
+  if (path.some((p) => p === "." || p === ".." || p.includes("/") || p.includes("\\")))
+    return Response.json({ error: "Invalid path" }, { status: 400 });
   const target = new URL(`${apiUrl()}/v1/${path.map(encodeURIComponent).join("/")}`);
   target.search = new URL(req.url).search;
   // Same rule as server pages: the selected workspace cookie, else the user's first workspace.

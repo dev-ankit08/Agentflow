@@ -417,3 +417,40 @@ describe("response cache", () => {
     expect(cache.entries.size).toBe(0);
   });
 });
+
+describe("loop state across turns", () => {
+  it("starts every loop afresh on the next message, even if the last turn left it mid-way", async () => {
+    const t = setup();
+    const f = flow(
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        { id: "each", type: "loop", label: "Each", position: at, config: { items: "trigger.items" } },
+        {
+          id: "check",
+          type: "decision",
+          label: "Is it 2?",
+          position: at,
+          config: { outcomes: [{ id: "found", condition: "item == 2" }], defaultOutcome: "next" },
+        },
+        { id: "found", type: "end", label: "Found", position: at, config: { message: "found at {{item_index}}" } },
+        { id: "none", type: "end", label: "None", position: at, config: { message: "not found" } },
+      ],
+      [
+        { id: "1", source: "start", target: "each" },
+        { id: "2", source: "each", sourceHandle: "each", target: "check" },
+        { id: "3", source: "check", sourceHandle: "found", target: "found" },
+        { id: "4", source: "check", sourceHandle: "next", target: "each" },
+        { id: "5", source: "each", sourceHandle: "done", target: "none" },
+      ],
+    );
+    const runId = await t.executor.start(
+      { ...base, flow: f, triggerType: "chat", input: { message: "look", items: [1, 2, 3] } },
+      t.emit,
+    );
+    expect(finalMessage(t.events)).toBe("found at 1");
+    await t.executor.sendMessage(runId, "again", t.emit);
+    // Before the fix the loop resumed at item 3 and answered "not found".
+    expect(finalMessage(t.events)).toBe("found at 1");
+    expect((await t.store.load(runId))!.state.loops).toEqual({ each: { items: [1, 2, 3], index: 1, results: [] } });
+  });
+});

@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { auditEvents, feedback, memories, runs, type Db } from "@agentflow/db";
-import { currentWorkspace } from "../auth";
+import { HttpError, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
 import { audit } from "../automation";
 import { csvCell } from "../csv";
@@ -57,7 +57,9 @@ export function auditHook(db: Db) {
     if (!req.workspace || reply.statusCode >= 400) return;
     const action = AUDITED[`${req.method} ${req.routeOptions.url}`];
     if (!action) return;
-    const params = (req.params ?? {}) as Record<string, string>;
+    // Erasing a customer must not leave their id behind in the audit log.
+    const erasure = req.routeOptions.url === "/v1/end-users/:id";
+    const params: Record<string, string> = erasure ? {} : ((req.params ?? {}) as Record<string, string>);
     const targetType = (req.routeOptions.url ?? "").split("/")[2] ?? "workspace";
     await audit(
       db,
@@ -77,16 +79,13 @@ export async function governanceRoutes(app: FastifyInstance, { db, auth }: Deps)
     async (req, reply) => {
       const ws = currentWorkspace(req);
       const csv = req.query.format === "csv";
-      const limit = Math.min(Number(req.query.limit) || (csv ? 10_000 : 100), 10_000);
+      const limit = Math.min(Math.max(1, Math.floor(Number(req.query.limit)) || (csv ? 10_000 : 100)), 10_000);
+      const before = req.query.before ? new Date(req.query.before) : null;
+      if (before && Number.isNaN(before.getTime())) throw new HttpError(400, "before must be a date");
       const rows = await db
         .select()
         .from(auditEvents)
-        .where(
-          and(
-            eq(auditEvents.workspaceId, ws.id),
-            req.query.before ? lt(auditEvents.createdAt, new Date(req.query.before)) : undefined,
-          ),
-        )
+        .where(and(eq(auditEvents.workspaceId, ws.id), before ? lt(auditEvents.createdAt, before) : undefined))
         .orderBy(desc(auditEvents.createdAt))
         .limit(limit);
       if (!csv) return { events: rows };

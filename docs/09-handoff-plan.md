@@ -301,6 +301,47 @@ When asked:
 
 See `docs/03-architecture.md` §3.7/§10.
 
+## 4b. Review fixes (branch `review-fixes`)
+
+A three-way review of `main` after PR #1 found about 29 issues. All are fixed, with tests:
+
+- **Permissions:**
+  - Owner-only routes always need an owner.
+  - Custom roles can't hold owner-only permissions or more than their creator.
+  - Members can't assign a role above their own or change someone who outranks them.
+  - Approval email links, notifications and live co-editing respect custom roles.
+  - Live co-editing re-checks access every 30 s.
+- **Webhooks:** AgentFlow-signed webhooks need `x-agentflow-timestamp`; the HMAC covers `timestamp.body`, valid for 5 minutes. HubSpot timestamps must be numeric.
+- **Live co-editing and autosave:**
+  - Pending local edits are pushed before a remote change applies and after a reconnect.
+  - Undo history is cleared on remote changes.
+  - A REST draft save while a session is live is merged into the live document.
+  - Only one autosave runs at a time, with an edit counter.
+  - The status shows "saved" while live, and `baseUpdatedAt` is refreshed when going offline.
+- **Runtime:** loop state resets every turn, with a cap of 2,000 loop steps per turn. Supervisor, Parallel, Subflow and Memory get longer default timeouts.
+- **Background jobs:**
+  - The sweep never overlaps itself.
+  - Schedule and report claims are atomic `jsonb_set` updates.
+  - Scheduled runs and timer resumes run in the background; a failed resume is put back to `waiting_timer`.
+  - Memory extraction marks up to the last step.
+- **Retention:**
+  - Zero-retention scrubbing goes by last activity.
+  - The cache and memory extraction respect zero retention.
+  - `scrubState` clears loop state.
+- **Cache:** reworded matches need the same numbers and emails.
+- **Indexing and search:** a bad passage is marked `#failed` instead of stalling indexing, and full-text queries quote lexemes (`orQuery`).
+- **Smaller fixes:**
+  - Decision outcome renames keep their connection.
+  - Comment errors are shown.
+  - List fields accept commas, and number fields accept 0 and decimals.
+  - The trigger JSON box stays in sync.
+  - Quick replies keep a trailing "/".
+  - Bad inputs return 400s, and erased ids stay out of the audit log.
+  - The proxy refuses dot segments.
+  - The prompt diff no longer shows a phantom row.
+  - The first collab token fetch is retried.
+- **Repo:** `.gitattributes` keeps LF line endings on Windows checkouts.
+
 ## 5. Known limitations and small tech debt
 
 - Background jobs (approvals, timers, schedules, retention) run on a 20 s timer **inside the API process**. Running

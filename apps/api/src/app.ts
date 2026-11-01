@@ -214,7 +214,18 @@ export async function buildApp(opts: AppOptions) {
   // Background work: approvals past their deadline take their "timeout" path, Wait nodes whose time has
   // come continue, schedules fire, and old data is removed per the workspace's retention settings.
   let lastRetention = 0;
+  // A slow sweep (e.g. a long scheduled run) must not overlap the next one.
+  let sweeping = false;
   const sweep = async () => {
+    if (sweeping) return;
+    sweeping = true;
+    try {
+      await sweepOnce();
+    } finally {
+      sweeping = false;
+    }
+  };
+  const sweepOnce = async () => {
     await sweepExpiredApprovals(opts.db, executor).catch((err) => app.log.error({ err }, "approval sweep failed"));
     await resumeDueTimers(opts.db, executor).catch((err) => app.log.error({ err }, "timer sweep failed"));
     await runSchedules(opts.db, executor).catch((err) => app.log.error({ err }, "schedule sweep failed"));

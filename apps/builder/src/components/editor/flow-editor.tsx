@@ -111,6 +111,9 @@ function Editor({
     canEdit,
     onRemote: (remote) => {
       const next = toCanvas(remote);
+      // Undo only covers your own edits: restoring an older snapshot would revert other people's changes.
+      past.current = [];
+      future.current = [];
       setBase(remote);
       setNodes((prev) => {
         const selected = new Set(prev.filter((n) => n.selected).map((n) => n.id));
@@ -143,6 +146,7 @@ function Editor({
     setNodes(s.nodes);
     setEdges(s.edges);
     setBase(s.base);
+    editVersion.current++;
     setSaveState("unsaved");
   };
   const undo = useCallback(() => {
@@ -159,15 +163,23 @@ function Editor({
   }, [snapshot]);
 
   // --- Saving --------------------------------------------------------------------
+  // Edits are counted so a save that was in flight while you kept typing doesn't claim "Saved".
+  const editVersion = useRef(0);
+  const saving = useRef(false);
   const save = useCallback(
     async (force = false): Promise<boolean> => {
       if (!canEdit) return true;
+      // One autosave at a time; a second one would carry a stale baseUpdatedAt and conflict with itself.
+      if (saving.current && !force) return false;
+      saving.current = true;
+      const version = editVersion.current;
       setSaveState("saving");
       const res = await fetch(`/api/v1/flows/${flowId}/draft`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ draft, baseUpdatedAt: baseUpdatedAt.current, force }),
       }).catch(() => null);
+      saving.current = false;
       if (res?.status === 409) {
         setConflict(true);
         setSaveState("error");
@@ -179,7 +191,7 @@ function Editor({
         setConflict(false);
         setNewerElsewhere(false);
       }
-      setSaveState(res?.ok ? "saved" : "error");
+      setSaveState(res?.ok ? (editVersion.current === version ? "saved" : "unsaved") : "error");
       return Boolean(res?.ok);
     },
     [canEdit, draft, flowId],
@@ -216,11 +228,15 @@ function Editor({
   useEffect(() => void loadComments(), [loadComments]);
   const addComment = useCallback(
     async (nodeId: string, body: string) => {
-      await fetch(`/api/v1/flows/${flowId}/comments`, {
+      const res = await fetch(`/api/v1/flows/${flowId}/comments`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ nodeId, body }),
-      });
+      }).catch(() => null);
+      if (!res?.ok) {
+        const err = res ? await res.json().catch(() => ({})) : {};
+        throw new Error(err.error ?? "Could not post the comment");
+      }
       await loadComments();
     },
     [flowId, loadComments],
@@ -231,7 +247,7 @@ function Editor({
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ resolved }),
-      });
+      }).catch(() => null);
       await loadComments();
     },
     [flowId, loadComments],
@@ -252,7 +268,34 @@ function Editor({
     return () => window.removeEventListener("beforeunload", warn);
   }, [saveState]);
 
-  const touch = () => setSaveState("unsaved");
+  const touch = () => {
+    editVersion.current++;
+    setSaveState("unsaved");
+  };
+
+  // While live the API saves the shared document, so local edits count as saved.
+  useEffect(() => {
+    if (collab.live && saveState === "unsaved") setSaveState("saved");
+  }, [collab.live, saveState]);
+
+  // Coming back from live editing: others saved meanwhile, so start conflict checks from the current version.
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (collab.live) {
+      wasLive.current = true;
+      return;
+    }
+    if (!wasLive.current) return;
+    wasLive.current = false;
+    void fetch(`/api/v1/flows/${flowId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((f) => {
+        if (f?.updatedAt) baseUpdatedAt.current = f.updatedAt;
+        setNewerElsewhere(false);
+        setConflict(false);
+      })
+      .catch(() => {});
+  }, [collab.live, flowId]);
 
   // --- Canvas changes --------------------------------------------------------------
   const onNodesChange = useCallback(
@@ -325,15 +368,34 @@ function Editor({
   const updateNode = useCallback(
     (next: NodeDef) => {
       remember(true);
+      const prev = nodes.find((n) => n.id === next.id)?.data.node;
       setNodes((ns) => ns.map((n) => (n.id === next.id ? { ...n, data: { ...n.data, node: next } } : n)));
-      // Drop connections whose decision outcome no longer exists.
       if (next.type === "decision") {
+        // Renaming an outcome keeps its connection (matched by position); removed outcomes lose theirs.
+        const renamed = new Map<string, string>();
+        if (prev?.type === "decision") {
+          prev.config.outcomes.forEach((o, i) => {
+            const now = next.config.outcomes[i];
+            if (now && now.id !== o.id && next.config.outcomes.length === prev.config.outcomes.length)
+              renamed.set(o.id, now.id);
+          });
+          if (prev.config.defaultOutcome !== next.config.defaultOutcome)
+            renamed.set(prev.config.defaultOutcome, next.config.defaultOutcome);
+        }
         const handles = new Set([...next.config.outcomes.map((o) => o.id), next.config.defaultOutcome]);
-        setEdges((es) => es.filter((e) => e.source !== next.id || (e.sourceHandle && handles.has(e.sourceHandle))));
+        setEdges((es) =>
+          es
+            .map((e) =>
+              e.source === next.id && e.sourceHandle && renamed.has(e.sourceHandle)
+                ? { ...e, sourceHandle: renamed.get(e.sourceHandle)!, label: renamed.get(e.sourceHandle)! }
+                : e,
+            )
+            .filter((e) => e.source !== next.id || (e.sourceHandle && handles.has(e.sourceHandle))),
+        );
       }
       touch();
     },
-    [remember],
+    [remember, nodes],
   );
 
   const renameNode = useCallback(
@@ -836,7 +898,12 @@ function FlowSettings({
             disabled={readOnly}
             className="h-8 text-xs"
             value={settings.maxSteps}
-            onChange={(e) => onChange({ ...base, settings: { ...settings, maxSteps: Number(e.target.value) || 25 } })}
+            onChange={(e) =>
+              onChange({
+                ...base,
+                settings: { ...settings, maxSteps: e.target.value === "" ? 25 : Number(e.target.value) },
+              })
+            }
           />
         </Row>
         <Row label="Max cost per run ($)">
@@ -848,7 +915,10 @@ function FlowSettings({
             className="h-8 text-xs"
             value={settings.maxCostUsd}
             onChange={(e) =>
-              onChange({ ...base, settings: { ...settings, maxCostUsd: Number(e.target.value) || 0.5 } })
+              onChange({
+                ...base,
+                settings: { ...settings, maxCostUsd: e.target.value === "" ? 0.5 : Number(e.target.value) },
+              })
             }
           />
         </Row>

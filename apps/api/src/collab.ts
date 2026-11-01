@@ -7,9 +7,9 @@ import type { WebSocket } from "ws";
 import * as awarenessProtocol from "y-protocols/awareness";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
-import { flows, memberships, type Db } from "@agentflow/db";
+import { customRoles, flows, memberships, type Db } from "@agentflow/db";
 import type { FlowInput } from "@agentflow/flow-schema";
-import { hasRole } from "./auth";
+import { canEditFlows } from "./permissions";
 
 /** Collaboration tokens are minted by the builder for one user, separately from the 5-minute API tokens. */
 export const COLLAB_AUDIENCE = "agentflow-collab";
@@ -42,13 +42,40 @@ export function docToDraft(doc: Y.Doc): FlowInput {
   return { ...(Object.fromEntries(doc.getMap("meta").entries()) as Omit<FlowInput, "nodes" | "edges">), nodes, edges };
 }
 
-type Conn = { socket: WebSocket; readonly: boolean; clientIds: Set<number> };
+type Conn = { socket: WebSocket; userId: string; readonly: boolean; clientIds: Set<number> };
+
+/** Open documents by flow id, so other routes can push changes into a live session. */
+const liveRooms = new Map<string, Room>();
+
+/**
+ * A draft saved through the REST API while editors are live is merged into the shared document, so the next
+ * live save doesn't overwrite it and every open editor sees it.
+ */
+export function applyDraftToLiveRoom(flowId: string, draft: FlowInput) {
+  const room = liveRooms.get(flowId);
+  if (!room) return false;
+  room.doc.transact(() => {
+    for (const name of ["nodes", "edges"] as const) {
+      const map = room.doc.getMap<unknown>(name);
+      const ids = new Set(draft[name].map((x) => x.id));
+      for (const id of [...map.keys()]) if (!ids.has(id)) map.delete(id);
+      for (const item of draft[name])
+        if (JSON.stringify(map.get(item.id)) !== JSON.stringify(item)) map.set(item.id, item);
+    }
+    const meta = room.doc.getMap<unknown>("meta");
+    const { nodes: _n, edges: _e, ...rest } = draft;
+    for (const key of [...meta.keys()]) if (!(key in rest)) meta.delete(key);
+    for (const [k, v] of Object.entries(rest)) if (JSON.stringify(meta.get(k)) !== JSON.stringify(v)) meta.set(k, v);
+  }, "rest");
+  return true;
+}
 type Room = {
   flowId: string;
   doc: Y.Doc;
   awareness: awarenessProtocol.Awareness;
   conns: Set<Conn>;
   saveTimer: NodeJS.Timeout | null;
+  recheck?: NodeJS.Timeout;
   save: () => Promise<void>;
 };
 
@@ -113,7 +140,33 @@ export async function collabRoutes(app: FastifyInstance, opts: { db: Db; jwtSecr
         for (const c of room.conns) send(c, message);
       },
     );
+    liveRooms.set(flowId, room);
+    // Access is re-checked while connected: removed members are disconnected, downgraded ones become read-only.
+    room.recheck = setInterval(() => void recheckAccess(room).catch(() => {}), 30_000);
+    room.recheck.unref();
     return room;
+  }
+
+  async function memberAccess(flowId: string, userId: string) {
+    const [member] = await db
+      .select({
+        role: memberships.role,
+        customRoleId: memberships.customRoleId,
+        customPermissions: customRoles.permissions,
+      })
+      .from(flows)
+      .innerJoin(memberships, and(eq(memberships.workspaceId, flows.workspaceId), eq(memberships.userId, userId)))
+      .leftJoin(customRoles, eq(customRoles.id, memberships.customRoleId))
+      .where(eq(flows.id, flowId));
+    return member ? { canEdit: canEditFlows(member) } : null;
+  }
+
+  async function recheckAccess(room: Room) {
+    for (const conn of room.conns) {
+      const access = await memberAccess(room.flowId, conn.userId);
+      if (!access) conn.socket.close(4403, "Access removed");
+      else conn.readonly = !access.canEdit;
+    }
   }
 
   const roomFor = (flowId: string) => {
@@ -132,6 +185,8 @@ export async function collabRoutes(app: FastifyInstance, opts: { db: Db; jwtSecr
       // Last one out: write any pending edits and forget the document (the database copy is the source of truth).
       if (room.saveTimer) await room.save().catch((err) => app.log.error({ err }, "collab save failed"));
       rooms.delete(room.flowId);
+      liveRooms.delete(room.flowId);
+      if (room.recheck) clearInterval(room.recheck);
       room.doc.destroy();
     }
   }
@@ -158,19 +213,12 @@ export async function collabRoutes(app: FastifyInstance, opts: { db: Db; jwtSecr
       } catch {
         return socket.close(4401, "Invalid or expired collaboration token");
       }
-      const [member] = await db
-        .select({ role: memberships.role })
-        .from(flows)
-        .innerJoin(
-          memberships,
-          and(eq(memberships.workspaceId, flows.workspaceId), eq(memberships.userId, userId ?? "")),
-        )
-        .where(eq(flows.id, req.params.flowId));
+      const member = await memberAccess(req.params.flowId, userId ?? "");
       if (!member) return socket.close(4404, "Flow not found");
 
       const room = await roomFor(req.params.flowId);
       if (closedEarly) return;
-      const conn: Conn = { socket, readonly: !hasRole(member.role, "builder"), clientIds: new Set() };
+      const conn: Conn = { socket, userId: userId!, readonly: !member.canEdit, clientIds: new Set() };
       room.conns.add(conn);
 
       onMessage = (data: Buffer) => {

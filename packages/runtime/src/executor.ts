@@ -45,7 +45,18 @@ export type ResumeInput = { handle?: string; output?: Record<string, unknown>; m
 
 export type Emit = (event: RunEvent) => void;
 
-const DEFAULT_TIMEOUT: Partial<Record<NodeDef["type"], number>> = { agent: 120_000, mcp_tool: 30_000, http: 30_000 };
+const DEFAULT_TIMEOUT: Partial<Record<NodeDef["type"], number>> = {
+  agent: 120_000,
+  mcp_tool: 30_000,
+  http: 30_000,
+  // Nodes that make several model calls or run a whole child flow.
+  supervisor: 600_000,
+  parallel: 300_000,
+  subflow: 600_000,
+  memory: 120_000,
+};
+/** Safety net for loops: steps inside Loop bodies per turn. */
+const LOOP_STEP_CAP = 2_000;
 
 /** Seam for a durable engine later (docs/03-architecture.md §10). */
 export interface RunExecutor {
@@ -117,6 +128,9 @@ export class InProcessExecutor implements RunExecutor {
     state.nodeOutputs = {};
     state.currentNodeId = startNode.id;
     state.turnSteps = 0;
+    // A new turn starts every Loop afresh, even if the last turn left one mid-way (e.g. its body ended the turn).
+    state.loops = {};
+    state.loopSteps = 0;
     emit({ type: "run_started", runId });
     await this.drive(runId, run.workspaceId, run.flow, state, true, emit);
   }
@@ -186,6 +200,8 @@ export class InProcessExecutor implements RunExecutor {
       while (state.currentNodeId) {
         const node = nodes.get(state.currentNodeId);
         if (!node) throw new Error(`Unknown node "${state.currentNodeId}"`);
+        if ((state.loopSteps ?? 0) >= LOOP_STEP_CAP)
+          throw new Error(`Stopped after ${LOOP_STEP_CAP} steps inside loops in one turn`);
         if (state.turnSteps >= flow.settings.maxSteps)
           throw new Error(`Stopped after ${flow.settings.maxSteps} steps (maxSteps)`);
         if (state.costUsd > flow.settings.maxCostUsd)
@@ -258,6 +274,7 @@ export class InProcessExecutor implements RunExecutor {
         state.stepIndex++;
         // Steps inside a Loop body are bounded by the Loop's own maxIterations instead.
         if (!Object.keys(state.loops ?? {}).length) state.turnSteps++;
+        else state.loopSteps = (state.loopSteps ?? 0) + 1;
 
         await store.appendStep({
           runId,

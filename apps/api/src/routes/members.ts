@@ -4,6 +4,19 @@ import { z } from "zod";
 import { customRoles, invites, memberships, roles, users, type Db, type Role } from "@agentflow/db";
 import { HttpError, currentUser, currentWorkspace, hasRole } from "../auth";
 import type { Deps } from "../app";
+import { roleRank, type Permission } from "../permissions";
+
+/** Members can't hand out a role above their own, nor a custom role with permissions they lack. */
+function assertCanAssign(
+  ws: { role: Role; permissions: Permission[] },
+  role: Role,
+  customPermissions: string[] | null = null,
+) {
+  if (ws.role === "owner") return;
+  if (roleRank(role) > roleRank(ws.role)) throw new HttpError(403, `You can't assign a role above your own (${role})`);
+  const missing = (customPermissions ?? []).filter((p) => !ws.permissions.includes(p as Permission));
+  if (missing.length) throw new HttpError(403, `That role has permissions you don't have: ${missing.join(", ")}`);
+}
 
 const Invite = z.object({
   email: z.string().trim().toLowerCase().pipe(z.email()),
@@ -52,6 +65,7 @@ export async function memberRoutes(app: FastifyInstance, { db, auth }: Deps) {
     const body = Invite.parse(req.body);
     const ws = currentWorkspace(req);
     if (body.role === "owner" && ws.role !== "owner") throw new HttpError(403, "Only owners can invite owners");
+    assertCanAssign(ws, body.role);
 
     const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, body.email));
     if (existing) {
@@ -102,12 +116,17 @@ export async function memberRoutes(app: FastifyInstance, { db, auth }: Deps) {
         if (!custom) throw new HttpError(404, "Role not found");
         role = custom.baseRole;
         customRoleId = custom.id;
+        assertCanAssign(ws, role, custom.permissions);
       }
+      if ("role" in body) assertCanAssign(ws, role);
       const [target] = await db
         .select({ role: memberships.role })
         .from(memberships)
         .where(and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, req.params.userId)));
       if (!target) throw new HttpError(404, "Member not found");
+      if (ws.role !== "owner" && roleRank(target.role) > roleRank(ws.role)) {
+        throw new HttpError(403, "You can't change the role of someone above you");
+      }
       if ((role === "owner" || target.role === "owner") && !hasRole(ws.role, "owner")) {
         throw new HttpError(403, "Only owners can change owner roles");
       }
@@ -132,6 +151,9 @@ export async function memberRoutes(app: FastifyInstance, { db, auth }: Deps) {
         .from(memberships)
         .where(and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, req.params.userId)));
       if (!target) throw new HttpError(404, "Member not found");
+      if (ws.role !== "owner" && roleRank(target.role) > roleRank(ws.role)) {
+        throw new HttpError(403, "You can't remove someone above you");
+      }
       if (target.role === "owner") {
         if (!hasRole(ws.role, "owner")) throw new HttpError(403, "Only owners can remove owners");
         if ((await ownerCount(db, ws.id)) <= 1) throw new HttpError(409, "A workspace needs at least one owner");

@@ -372,7 +372,7 @@ function verifySignature(
   if (webhook.signature === "hubspot") {
     // HubSpot v3: base64(HMAC-SHA256(client secret, method + full URL + body + timestamp)), at most 5 minutes old.
     const timestamp = String(req.headers["x-hubspot-request-timestamp"] ?? "");
-    if (!timestamp || Math.abs(Date.now() - Number(timestamp)) > 5 * 60_000)
+    if (!timestamp || !Number.isFinite(Number(timestamp)) || Math.abs(Date.now() - Number(timestamp)) > 5 * 60_000)
       throw new HttpError(401, "Missing or stale HubSpot timestamp");
     const uri = `${publicApiUrl}${req.url}`;
     const expected = createHmac("sha256", secret).update(`${req.method}${uri}${raw}${timestamp}`).digest("base64");
@@ -380,7 +380,11 @@ function verifySignature(
       throw new HttpError(401, "Invalid HubSpot signature");
     return;
   }
-  const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
+  // The timestamp is signed with the body and must be recent, so a captured request can't be replayed later.
+  const ts = String(req.headers["x-agentflow-timestamp"] ?? "");
+  if (!/^\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300)
+    throw new HttpError(401, "Missing or stale x-agentflow-timestamp (Unix seconds, within 5 minutes)");
+  const expected = `sha256=${createHmac("sha256", secret).update(`${ts}.${raw}`).digest("hex")}`;
   if (!equal(expected, String(req.headers["x-agentflow-signature"] ?? "")))
     throw new HttpError(401, "Invalid signature");
 }
@@ -546,6 +550,8 @@ export async function hookRoutes(app: FastifyInstance, { db, executor, secrets, 
     } catch {
       throw new HttpError(400, "Send the email as JSON or form fields");
     }
+    if (!fields || typeof fields !== "object" || Array.isArray(fields))
+      throw new HttpError(400, "Send the email as a JSON object or form fields");
     const pick = (...keys: string[]) => {
       for (const k of keys) if (typeof fields[k] === "string" && fields[k]) return fields[k] as string;
       return "";

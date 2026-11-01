@@ -103,11 +103,20 @@ export async function sendDueReports(db: Db, notifier: Notifier, appUrl: string,
     const r = ws.settings.reports as ReportSettings;
     if (now.getUTCDay() !== r.weekday || now.getUTCHours() < r.hourUtc) continue;
     if (r.lastSentAt?.slice(0, 10) === today) continue;
-    // Mark first, so a slow mail server can't cause a second send on the next sweep.
-    await db
+    // Claim today's report atomically (touching only lastSentAt), so overlapping sweeps send it once.
+    const claimed = await db
       .update(workspaces)
-      .set({ settings: { ...ws.settings, reports: { ...r, lastSentAt: now.toISOString() } } })
-      .where(eq(workspaces.id, ws.id));
+      .set({
+        settings: sql`jsonb_set(${workspaces.settings}, '{reports,lastSentAt}', to_jsonb(${now.toISOString()}::text))`,
+      })
+      .where(
+        and(
+          eq(workspaces.id, ws.id),
+          sql`coalesce(left(${workspaces.settings}->'reports'->>'lastSentAt', 10), '') <> ${today}`,
+        ),
+      )
+      .returning({ id: workspaces.id });
+    if (!claimed.length) continue;
     const to = await recipients(db, ws.id, r.extraRecipients ?? []);
     sent += (await sendReport(db, notifier, appUrl, ws.id, to)).sent;
   }

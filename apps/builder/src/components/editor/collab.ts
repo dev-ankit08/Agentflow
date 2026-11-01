@@ -34,6 +34,7 @@ function pushChanges(doc: Y.Doc, draft: FlowInput, last: FlowInput) {
     const { nodes: _n, edges: _e, ...rest } = draft;
     const { nodes: _ln, edges: _le, ...lastRest } = last;
     for (const [k, v] of Object.entries(rest)) if (!same((lastRest as Record<string, unknown>)[k], v)) meta.set(k, v);
+    for (const k of Object.keys(lastRest)) if (!(k in rest)) meta.delete(k);
   }, LOCAL);
 }
 
@@ -60,8 +61,13 @@ export function useCollab({
   const docRef = useRef<Y.Doc | null>(null);
   const synced = useRef(false);
   const last = useRef<FlowInput | null>(null);
+  // The latest local draft, so pending edits can be pushed before a remote change replaces the canvas.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const onRemoteRef = useRef(onRemote);
   onRemoteRef.current = onRemote;
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
 
   useEffect(() => {
     let provider: WebsocketProvider | null = null;
@@ -73,7 +79,12 @@ export function useCollab({
       return res?.ok ? ((await res.json()) as { token: string; url: string }) : null;
     };
     void (async () => {
-      const auth = await freshToken();
+      // Retry the first token fetch for a while instead of staying offline for the whole session.
+      let auth = await freshToken();
+      for (let i = 0; !auth && !stopped && i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+        auth = await freshToken();
+      }
       if (!auth || stopped) return setStatus("offline");
       provider = new WebsocketProvider(auth.url, flowId, doc, { params: { token: auth.token }, disableBc: true });
       provider.on("status", async ({ status: s }: { status: string }) => {
@@ -86,13 +97,18 @@ export function useCollab({
       });
       provider.on("sync", (isSynced: boolean) => {
         if (!isSynced) return;
+        // On a reconnect, edits made while offline are pushed first instead of being overwritten.
+        if (last.current && canEditRef.current) pushChanges(doc, draftRef.current, last.current);
         synced.current = true;
         setStatus("live");
         last.current = onRemoteRef.current(docToDraft(doc));
       });
     })();
     doc.on("update", (_update: Uint8Array, origin: unknown) => {
-      if (origin !== LOCAL && synced.current) last.current = onRemoteRef.current(docToDraft(doc));
+      if (origin === LOCAL || !synced.current) return;
+      // Push this editor's not-yet-sent changes first, so the remote update doesn't wipe them.
+      if (last.current && canEditRef.current) pushChanges(doc, draftRef.current, last.current);
+      last.current = onRemoteRef.current(docToDraft(doc));
     });
     return () => {
       stopped = true;

@@ -1,10 +1,23 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { customRoles, memberships } from "@agentflow/db";
+import { customRoles, memberships, type Role } from "@agentflow/db";
 import { HttpError, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
-import { PERMISSIONS, permissionIds, presetPermissions, type Permission } from "../permissions";
+import { PERMISSIONS, permissionIds, presetPermissions, roleRank, type Permission } from "../permissions";
+import type { FastifyRequest } from "fastify";
+
+/** You can only hand out what you hold: no permission you lack, no base role above yours, nothing owner-only. */
+function assertWithinCreator(req: FastifyRequest, body: { baseRole: Role; permissions: Permission[] }) {
+  const ws = currentWorkspace(req);
+  const ownerOnly = body.permissions.filter((p) => PERMISSIONS[p].preset === "owner");
+  if (ownerOnly.length)
+    throw new HttpError(400, `Owner-only permissions can't be in a custom role: ${ownerOnly.join(", ")}`);
+  if (ws.role === "owner") return;
+  const missing = body.permissions.filter((p) => !ws.permissions.includes(p));
+  if (missing.length) throw new HttpError(403, `You can't grant permissions you don't have: ${missing.join(", ")}`);
+  if (roleRank(body.baseRole) > roleRank(ws.role)) throw new HttpError(403, "You can't create a role above your own");
+}
 
 const RoleBody = z.object({
   name: z.string().trim().min(1).max(60),
@@ -48,6 +61,7 @@ export async function roleRoutes(app: FastifyInstance, { db, auth }: Deps) {
 
   app.post("/roles", { preHandler: auth.requireWorkspace("admin") }, async (req, reply) => {
     const body = RoleBody.parse(req.body);
+    assertWithinCreator(req, body);
     const ws = currentWorkspace(req);
     const [row] = await db
       .insert(customRoles)
@@ -60,6 +74,7 @@ export async function roleRoutes(app: FastifyInstance, { db, auth }: Deps) {
 
   app.put<{ Params: { id: string } }>("/roles/:id", { preHandler: auth.requireWorkspace("admin") }, async (req) => {
     const body = RoleBody.parse(req.body);
+    assertWithinCreator(req, body);
     const ws = currentWorkspace(req);
     await find(ws.id, req.params.id);
     const [row] = await db

@@ -8,6 +8,10 @@ import { embeddingModelOf } from "./semantic";
 /** How close a reworded question must be (cosine similarity) to reuse an answer. */
 const SIMILARITY = 0.95;
 
+const identifiers = (s: string) =>
+  [...new Set(s.match(/[\w.+-]+@[\w-]+\.[\w.]+|\d[\d.,/-]*\d|\d/g) ?? [])].sort().join(" ");
+const sameIdentifiers = (a: string, b: string) => identifiers(a) === identifiers(b);
+
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const normalise = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -35,7 +39,8 @@ export function cacheService(db: Db, gateway: LLMGateway, workspaceId: string): 
       .select({ settings: workspaces.settings })
       .from(workspaces)
       .where(eq(workspaces.id, workspaceId));
-    return ws?.settings.cache?.enabled ? ws.settings.cache : null;
+    if (!ws?.settings.cache?.enabled) return null;
+    return { ...ws.settings.cache, zeroRetention: Boolean(ws.settings.retention?.zeroRetention) };
   };
   const embed = async (text: string) => {
     const model = await embeddingModelOf(db, workspaceId);
@@ -75,7 +80,9 @@ export function cacheService(db: Db, gateway: LLMGateway, workspaceId: string): 
           const best = candidates
             .map((c) => ({ c, sim: cosine(vector, c.embedding ?? []) }))
             .sort((a, b) => b.sim - a.sim)[0];
-          if (best && best.sim >= SIMILARITY) hit = best.c;
+          // Reworded questions only match when they mention the same numbers and emails (order ids,
+          // amounts, accounts), so one customer's answer can't be served for another customer's order.
+          if (best && best.sim >= SIMILARITY && sameIdentifiers(input, best.c.input)) hit = best.c;
         }
       }
       if (!hit) return null;
@@ -88,7 +95,8 @@ export function cacheService(db: Db, gateway: LLMGateway, workspaceId: string): 
 
     async store(q, answer) {
       const cfg = await settings();
-      if (!cfg) return;
+      // Zero retention: never keep questions or answers.
+      if (!cfg || cfg.zeroRetention) return;
       const { contextHash, input } = keyOf(q);
       const embedding = cfg.similar ? await embed(input) : null;
       const expiresAt = new Date(Date.now() + Math.max(1, cfg.ttlHours) * 3_600_000);
