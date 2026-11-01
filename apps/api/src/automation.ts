@@ -8,7 +8,16 @@ import { extractFacts, scrubState, type RunExecutor, type RunState, type Runtime
 /** Per-flow automation settings kept in `flows.settings` next to the widget settings. */
 export type FlowAutomation = {
   /** Webhook trigger (H8): POST /v1/hooks/:key, optionally signed with HMAC-SHA256. */
-  webhook?: { key: string; secretEnc?: string };
+  webhook?: {
+    key: string;
+    secretEnc?: string;
+    /** How requests are verified: AgentFlow's HMAC header, or HubSpot's v3 signature. */
+    signature?: "agentflow" | "hubspot";
+    /** A JSON array or CSV file starts one run per item. */
+    batch?: boolean;
+  };
+  /** Inbound email trigger: POST /v1/inbound/email/:key. */
+  emailHook?: { key: string };
   /** Last minute each schedule fired, so a restart never runs it twice. */
   scheduleState?: { lastRunAt?: string };
   /** A/B test (prompt versioning): this share of new conversations runs `versionId` instead of the live version. */

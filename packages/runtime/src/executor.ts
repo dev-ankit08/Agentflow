@@ -30,7 +30,7 @@ export type StartInput = {
   flowId: string;
   flowVersionId: string | null;
   flow: Flow;
-  triggerType: "chat" | "webhook" | "api" | "schedule";
+  triggerType: "chat" | "webhook" | "api" | "schedule" | "email";
   input: Record<string, unknown>;
   user?: Record<string, unknown>;
   endUserId?: string | null;

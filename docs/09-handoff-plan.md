@@ -140,14 +140,20 @@ Estimates are rough engineering days for this codebase.
    - Workspaces over their AI budget are skipped. A failing model is not retried until the conversation continues.
    - Settings → "Customer memory" turns it on and picks the model and idle time.
    - **Still open:** extraction cost is not added to the run's cost or the monthly usage figures.
-6. **More triggers (TR-1).**
-   - **Inbound email:** a `POST /v1/inbound/email/:key` webhook in the SendGrid/Mailgun inbound-parse format.
-   - **File drop:** an upload endpoint, and the file text goes into `trigger.file`.
-   - **CRM events:** reuse the webhook trigger with presets for HubSpot and Salesforce signatures.
-   - **Batch mode:** a "run for each row" option on webhook and schedule triggers, built on the Loop node.
-
-   Add each trigger type to `TriggerDef` in the schema (`email`, `file_drop` and `crm_event` already exist in the
-   enum) and to `TriggersPanel` in `inspector-orchestration.tsx`.
+6. **More triggers (TR-1) — done in part** on branch `e2e-and-leftovers`. All of it is in `hookRoutes` in
+   `apps/api/src/routes/automation-routes.ts` and the Start node's `TriggersPanel`.
+   - **Inbound email:** `POST /v1/inbound/email/:key` (address created with `POST /v1/flows/:id/email-hook`). It
+     accepts Postmark JSON, Mailgun form fields or plain JSON. The text is `trigger.message`, plus
+     `trigger.email.{from,to,subject,text}`, and runs get trigger type `email`.
+   - **File drop:** `POST /v1/hooks/:key/file` with the file as the raw body (text, CSV or JSON; name in `x-filename`).
+     It gives `trigger.file` and, for CSV, `trigger.rows` (parsed by `parseCsv`).
+   - **CRM events:** the webhook can verify HubSpot v3 signatures using the HubSpot app's client secret.
+   - **Batch mode:** a webhook option (`PATCH /v1/flows/:id/webhook`) where a JSON array or CSV file starts one run
+     per item (up to 500), with `batchIndex` and `batchSize` in the trigger. `?wait=true` returns every run's result.
+   - **Still open:**
+     - Multipart uploads (SendGrid inbound parse, browser form uploads) and PDF or Office text extraction.
+     - Salesforce outbound messages and Platform Events.
+     - Batch mode for schedules (use a Loop node meanwhile).
 7. **Approval notifications (H-2).** Notify approvers of new Inbox items by email (SMTP via `nodemailer`, Mailpit for
    local testing) and by Slack interactive message if a Slack channel is connected. Approve/reject links use a signed
    token.

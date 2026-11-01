@@ -436,6 +436,14 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
   }
 }
 
+type WebhookInfo = {
+  url: string;
+  fileUrl: string;
+  signed: boolean;
+  signature: "agentflow" | "hubspot";
+  batch: boolean;
+};
+
 const CRON_PRESETS = [
   { label: "Every hour", cron: "0 * * * *" },
   { label: "Every day at 09:00 UTC", cron: "0 9 * * *" },
@@ -459,14 +467,23 @@ export function TriggersPanel({
   const schedule = list.find((t) => t.type === "schedule");
   const cron = String(schedule?.config?.cron ?? "");
   const [inputText, setInputText] = useState(() => JSON.stringify(schedule?.config?.input ?? {}, null, 0));
-  const [hook, setHook] = useState<{ url: string; signed: boolean } | null>(null);
+  const [hook, setHook] = useState<WebhookInfo | null>(null);
+  const [emailUrl, setEmailUrl] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [hookError, setHookError] = useState<string | null>(null);
+  const [verify, setVerify] = useState<"agentflow" | "hubspot" | "none">("agentflow");
+  const [hubspotSecret, setHubspotSecret] = useState("");
 
   useEffect(() => {
     void fetch(`/api/v1/flows/${flowId}/triggers`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((b) => b && setHook(b.webhook));
+      .then((b) => {
+        if (!b) return;
+        setHook(b.webhook);
+        setEmailUrl(b.email?.url ?? null);
+        if (b.webhook)
+          setVerify(b.webhook.signature === "hubspot" ? "hubspot" : b.webhook.signed ? "agentflow" : "none");
+      });
   }, [flowId]);
 
   let preview: string;
@@ -483,24 +500,50 @@ export function TriggersPanel({
       ...(config ? [{ type: "schedule" as const, config }] : []),
     ]);
 
-  async function createHook() {
+  const send = async (path: string, method: string, body?: unknown) => {
     setHookError(null);
-    const res = await fetch(`/api/v1/flows/${flowId}/webhook`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ signed: true }),
+    const res = await fetch(`/api/v1/flows/${flowId}/${path}`, {
+      method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
     });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) return setHookError(body.error ?? "Could not create the webhook");
-    setHook({ url: body.url, signed: true });
+    const json = res.status === 204 ? {} : await res.json().catch(() => ({}));
+    if (!res.ok) setHookError(json.error ?? "Only admins can change triggers");
+    return res.ok ? json : null;
+  };
+  async function createHook() {
+    const body = await send("webhook", "POST", {
+      signed: verify !== "none",
+      signature: verify === "hubspot" ? "hubspot" : "agentflow",
+      ...(verify === "hubspot" && { secret: hubspotSecret }),
+      batch: hook?.batch ?? false,
+    });
+    if (!body) return;
+    setHook({
+      url: body.url,
+      fileUrl: `${body.url}/file`,
+      signed: verify !== "none",
+      signature: verify === "hubspot" ? "hubspot" : "agentflow",
+      batch: hook?.batch ?? false,
+    });
     setSecret(body.secret);
+    setHubspotSecret("");
   }
   async function removeHook() {
-    const res = await fetch(`/api/v1/flows/${flowId}/webhook`, { method: "DELETE" });
-    if (res.ok) {
+    if (await send("webhook", "DELETE")) {
       setHook(null);
       setSecret(null);
-    } else setHookError("Only admins can remove the webhook");
+    }
+  }
+  async function setBatch(batch: boolean) {
+    if (hook && (await send("webhook", "PATCH", { batch }))) setHook({ ...hook, batch });
+  }
+  async function createEmail() {
+    const body = await send("email-hook", "POST");
+    if (body) setEmailUrl(body.url);
+  }
+  async function removeEmail() {
+    if (await send("email-hook", "DELETE")) setEmailUrl(null);
   }
 
   return (
@@ -568,7 +611,7 @@ export function TriggersPanel({
       </div>
 
       <div className="space-y-2 rounded-lg border border-border p-2">
-        <p className="text-xs font-medium text-text">Webhook</p>
+        <p className="text-xs font-medium text-text">Webhook and file upload</p>
         {hook ? (
           <>
             <Input readOnly value={hook.url} className="h-8 font-mono text-[11px]" onFocus={(e) => e.target.select()} />
@@ -578,27 +621,87 @@ export function TriggersPanel({
               </p>
             )}
             <p className="text-[11px] text-muted">
-              POST JSON to this address; the body becomes {"{{trigger.*}}"}. Sign it with header{" "}
-              <code className="font-mono">x-agentflow-signature: sha256=&lt;HMAC of body&gt;</code>. Add{" "}
-              <code className="font-mono">?wait=true</code> to get the result back.
+              POST JSON to this address; the body becomes {"{{trigger.*}}"}. Send a file (text, CSV or JSON) as the body
+              to <code className="break-all font-mono">{hook.fileUrl}</code>; CSV rows become{" "}
+              <code className="font-mono">{"{{trigger.rows}}"}</code>.{" "}
+              {hook.signature === "hubspot"
+                ? "Requests are checked with HubSpot's v3 signature."
+                : hook.signed
+                  ? "Sign requests with header x-agentflow-signature: sha256=<HMAC of body>."
+                  : "Requests are not signed: keep the address private."}{" "}
+              Add <code className="font-mono">?wait=true</code> to get the result back.
             </p>
-            {!readOnly && (
-              <div className="flex gap-1">
-                <Button variant="secondary" size="sm" onClick={createHook}>
-                  Rotate
-                </Button>
+            <label className="flex items-center gap-2 text-[11px] text-text">
+              <input
+                type="checkbox"
+                disabled={readOnly}
+                checked={hook.batch}
+                onChange={(e) => void setBatch(e.target.checked)}
+              />
+              Batch mode: one run per item of a JSON array or CSV row (up to 500)
+            </label>
+          </>
+        ) : (
+          <p className="text-[11px] text-muted">Let other systems (CRM, forms, Zapier, file drops) start this flow.</p>
+        )}
+        {!readOnly && (
+          <div className="space-y-1.5 border-t border-border pt-2">
+            <Row label={hook ? "Rotate with verification" : "Verify requests with"}>
+              <Select
+                value={verify}
+                className="h-8 text-xs"
+                onChange={(e) => setVerify(e.target.value as typeof verify)}
+              >
+                <option value="agentflow">AgentFlow signature (recommended)</option>
+                <option value="hubspot">HubSpot signature (CRM events)</option>
+                <option value="none">No signature</option>
+              </Select>
+            </Row>
+            {verify === "hubspot" && (
+              <Input
+                type="password"
+                value={hubspotSecret}
+                placeholder="HubSpot app client secret"
+                className="h-8 text-xs"
+                onChange={(e) => setHubspotSecret(e.target.value)}
+              />
+            )}
+            <div className="flex gap-1">
+              <Button variant="secondary" size="sm" onClick={createHook}>
+                {hook ? "Rotate" : "Create webhook URL"}
+              </Button>
+              {hook && (
                 <Button variant="ghost" size="sm" onClick={removeHook}>
                   Remove
                 </Button>
-              </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-border p-2">
+        <p className="text-xs font-medium text-text">Inbound email</p>
+        {emailUrl ? (
+          <>
+            <Input readOnly value={emailUrl} className="h-8 font-mono text-[11px]" onFocus={(e) => e.target.select()} />
+            <p className="text-[11px] text-muted">
+              Point your email provider&apos;s inbound webhook (Postmark, Mailgun, or any service that posts JSON or
+              form fields) here. The email text is <code className="font-mono">{"{{trigger.message}}"}</code>; sender
+              and subject are in <code className="font-mono">{"{{trigger.email.*}}"}</code>.
+            </p>
+            {!readOnly && (
+              <Button variant="ghost" size="sm" onClick={removeEmail}>
+                Remove
+              </Button>
             )}
           </>
         ) : (
           <>
-            <p className="text-[11px] text-muted">Let other systems (CRM, forms, Zapier) start this flow.</p>
+            <p className="text-[11px] text-muted">Start this flow for every email sent to a support address.</p>
             {!readOnly && (
-              <Button variant="secondary" size="sm" onClick={createHook}>
-                Create webhook URL
+              <Button variant="secondary" size="sm" onClick={createEmail}>
+                Create inbound address
               </Button>
             )}
           </>

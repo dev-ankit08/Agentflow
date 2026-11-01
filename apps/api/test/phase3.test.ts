@@ -159,6 +159,80 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect((await app.inject({ method: "POST", url: "/v1/hooks/hk_nope", payload: {} })).statusCode).toBe(404);
   });
 
+  it("runs batches, files, HubSpot-signed events and inbound email", async () => {
+    const flowId = await makeFlow("Intake", ...echoFlow("Handled"));
+    await publish(flowId);
+    const post = (path: string, payload: string, headers: Record<string, string> = {}) =>
+      app.inject({ method: "POST", url: path, headers: { "content-type": "application/json", ...headers }, payload });
+
+    // Batch mode: a JSON array starts one run per item.
+    const created = (
+      await call(owner.id, "POST", `/v1/flows/${flowId}/webhook`, { signed: false, batch: true })
+    ).json();
+    const hook = new URL(created.url).pathname;
+    const batch = await post(`${hook}?wait=true`, JSON.stringify([{ order: "A1" }, { order: "A2" }, { order: "A3" }]));
+    expect(batch.json().runs.map((r: { output: { got: string } }) => r.output.got)).toEqual(["A1", "A2", "A3"]);
+
+    // A CSV file: one run per row in batch mode, or all rows in one run otherwise.
+    const csv = 'order,note\nB1,"needs ""gift"" wrap"\nB2,plain\n';
+    const rows = await post(`${hook}/file?wait=true`, csv, { "content-type": "text/csv", "x-filename": "orders.csv" });
+    expect(rows.json().runs).toHaveLength(2);
+    await call(owner.id, "PATCH", `/v1/flows/${flowId}/webhook`, { batch: false });
+    const single = await post(`${hook}/file?wait=true`, csv, { "content-type": "text/csv" });
+    const [run1] = await db.select().from(runs).where(eq(runs.id, single.json().runId));
+    expect((run1?.state as { trigger: { rows: unknown[] } }).trigger.rows).toEqual([
+      { order: "B1", note: 'needs "gift" wrap' },
+      { order: "B2", note: "plain" },
+    ]);
+
+    // HubSpot v3 signatures are checked with the app's client secret.
+    const hub = (
+      await call(owner.id, "POST", `/v1/flows/${flowId}/webhook`, {
+        signature: "hubspot",
+        secret: "hubspot-client-secret",
+      })
+    ).json();
+    const hubPath = new URL(hub.url).pathname;
+    const body = JSON.stringify([{ objectId: 42, subscriptionType: "deal.creation" }]);
+    const timestamp = String(Date.now());
+    const sign = (secret: string) =>
+      createHmac("sha256", secret)
+        .update(`POST${"http://localhost:4000"}${hubPath}${body}${timestamp}`)
+        .digest("base64");
+    const headers = { "x-hubspot-request-timestamp": timestamp };
+    expect((await post(hubPath, body, { ...headers, "x-hubspot-signature-v3": sign("wrong") })).statusCode).toBe(401);
+    expect(
+      (await post(hubPath, body, { ...headers, "x-hubspot-signature-v3": sign("hubspot-client-secret") })).statusCode,
+    ).toBe(202);
+
+    // Inbound email, as Postmark JSON or Mailgun form fields.
+    const email = (await call(owner.id, "POST", `/v1/flows/${flowId}/email-hook`)).json();
+    const emailPath = new URL(email.url).pathname;
+    const postmark = await post(
+      `${emailPath}?wait=true`,
+      JSON.stringify({ From: "ana@example.com", Subject: "Order help", TextBody: "Where is order 77?" }),
+    );
+    const [mailRun] = await db.select().from(runs).where(eq(runs.id, postmark.json().runId));
+    expect(mailRun?.triggerType).toBe("email");
+    expect((mailRun?.state as { trigger: Record<string, unknown> }).trigger).toMatchObject({
+      message: "Where is order 77?",
+      email: { from: "ana@example.com", subject: "Order help" },
+    });
+    const mailgun = await app.inject({
+      method: "POST",
+      url: emailPath,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        sender: "bo@example.com",
+        subject: "Hi",
+        "stripped-text": "Cancel please",
+      }).toString(),
+    });
+    expect(mailgun.statusCode).toBe(202);
+    const triggers = (await call(owner.id, "GET", `/v1/flows/${flowId}/triggers`)).json();
+    expect(triggers).toMatchObject({ webhook: { signature: "hubspot", batch: false }, email: { url: email.url } });
+  });
+
   it("fires schedules once per matching minute", async () => {
     const [nodes, edges] = echoFlow("Nightly report");
     const flowId = await makeFlow("Nightly", nodes, edges, {
