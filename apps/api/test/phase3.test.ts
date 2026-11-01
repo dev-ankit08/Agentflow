@@ -1,9 +1,13 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { and, eq, like } from "drizzle-orm";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
+import { WebsocketProvider } from "y-websocket";
+import * as Y from "yjs";
 import { createDb, flows, orgs, runSteps, runs, users } from "@agentflow/db";
 import type { FlowInput } from "@agentflow/flow-schema";
 import { LLMGateway } from "@agentflow/llm-gateway";
@@ -11,6 +15,7 @@ import { startMockLlm } from "@agentflow/llm-gateway/mock-server";
 import { createSecretStore } from "@agentflow/secret-store";
 import { buildApp } from "../src/app";
 import { TOKEN_AUDIENCE, TOKEN_ISSUER } from "../src/auth";
+import { COLLAB_AUDIENCE } from "../src/collab";
 import { applyRetention, chooseVersion, extractMemories, resumeDueTimers, runSchedules } from "../src/automation";
 import { loadRootEnv } from "../src/config";
 import { ROUTE_PERMISSIONS } from "../src/permissions";
@@ -692,6 +697,62 @@ describe.skipIf(!url)("Phase 3 API", () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it("shares a live document between editors and saves it to the draft", async () => {
+    const flowId = await makeFlow("Co-edit", ...echoFlow("Hello"));
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as AddressInfo).port;
+    const token = (sub: string) =>
+      new SignJWT({})
+        .setProtectedHeader({ alg: "HS256" })
+        .setSubject(sub)
+        .setIssuer(TOKEN_ISSUER)
+        .setAudience(COLLAB_AUDIENCE)
+        .setExpirationTime("10m")
+        .sign(new TextEncoder().encode(jwtSecret));
+    const connect = async (sub: string) => {
+      const doc = new Y.Doc();
+      const provider = new WebsocketProvider(`ws://127.0.0.1:${port}/v1/collab`, flowId, doc, {
+        params: { token: await token(sub) },
+        WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
+        disableBc: true,
+      });
+      await new Promise<void>((resolve) => provider.once("sync", () => resolve()));
+      return { doc, provider, nodes: doc.getMap<{ id: string; label: string }>("nodes") };
+    };
+
+    const a = await connect(owner.id);
+    const b = await connect(builder.id);
+    expect([...a.nodes.keys()].sort()).toEqual(["end", "start"]);
+
+    // An edit in one editor appears in the other, and is saved to the draft shortly after.
+    a.nodes.set("end", { ...a.nodes.get("end")!, label: "Goodbye" });
+    await expect.poll(() => b.nodes.get("end")?.label).toBe("Goodbye");
+    await expect
+      .poll(async () => {
+        const [row] = await db.select({ draft: flows.draftJson }).from(flows).where(eq(flows.id, flowId));
+        return row?.draft.nodes.find((n) => n.id === "end")?.label;
+      })
+      .toBe("Goodbye");
+
+    // Reviewers can watch but their edits are ignored.
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "reviewer" });
+    b.provider.destroy();
+    const watcher = await connect(builder.id);
+    watcher.nodes.set("end", { ...watcher.nodes.get("end")!, label: "Hijacked" });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(a.nodes.get("end")?.label).toBe("Goodbye");
+    watcher.provider.destroy();
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "builder" });
+
+    // A bad token is refused.
+    const closed = await new Promise<number>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/collab/${flowId}?token=nope`);
+      ws.on("close", (code) => resolve(code));
+    });
+    expect(closed).toBe(4401);
+    a.provider.destroy();
   });
 
   it("records configuration changes in the audit log", async () => {

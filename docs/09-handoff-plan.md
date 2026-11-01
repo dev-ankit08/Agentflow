@@ -210,10 +210,24 @@ Estimates are rough engineering days for this codebase.
     - UI: Settings → "Custom roles" (permission checkboxes), and custom roles in each member's role dropdown.
     - **Still open:** the builder UI still hides buttons by built-in role, so a custom role that grants more than its
       base role can do it through the API but may not see the button.
-13. **Real-time co-editing (CO-1, rest).**
-    - Add Yjs: a `y-websocket`-style endpoint on the API (Fastify websocket) and the editor's nodes and edges in a Y.Doc.
-    - Keep autosave of the draft JSON.
-    - Presence, comments and conflict detection already exist; the conflict banner becomes a fallback.
+13. **Real-time co-editing (CO-1) — done** on branch `e2e-and-leftovers`.
+    - Server: `apps/api/src/collab.ts` serves `GET /v1/collab/:flowId` (websocket, y-websocket protocol) with one Yjs
+      document per open flow, seeded from the draft. Nodes and edges are maps keyed by id; flow fields live in "meta".
+    - Tokens: connections need a one-hour token (audience `agentflow-collab`) from the builder's
+      `/api/collab-token`.
+    - Read-only access: members below builder can watch, but their edits are ignored.
+    - Saving: the server writes the merged draft back about 0.8 s after the last change, and when the last editor
+      leaves.
+    - Editor: `useCollab` in `components/editor/collab.ts` pushes only this editor's own changes, compared with the
+      last state it synced. This prevents a peer's stale copy from overwriting someone else's edit, a bug found and
+      fixed in the two-tab test.
+    - While live, the header shows "● Live · saved automatically", per-tab autosave and conflict banners step aside,
+      and Publish and Test save first. If the socket is down, the editor falls back to normal saving with conflict
+      detection.
+    - **Still open:**
+      - Undo can revert a collaborator's later change to the same node.
+      - Live cursors (presence already shows who is on which node).
+      - Documents are held in the API process (a scale-up item).
 14. **Scheduled ROI email reports (A-3) — done** on branch `e2e-and-leftovers`. The code is in
     `apps/api/src/reports.ts`.
     - `sendDueReports` runs in the API sweep. On the workspace's chosen weekday and hour (UTC), it emails owners,

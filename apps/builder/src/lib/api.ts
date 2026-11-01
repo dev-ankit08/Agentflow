@@ -61,3 +61,17 @@ export async function apiFetch<T>(
   }
   return data as T;
 }
+
+/** A one-hour token for the live co-editing socket (audience "agentflow-collab"). */
+export async function mintCollabToken(): Promise<string | null> {
+  const session = await auth();
+  if (!session?.user?.id) return null;
+  return new SignJWT({})
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(session.user.id)
+    .setIssuer("agentflow-builder")
+    .setAudience("agentflow-collab")
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .sign(new TextEncoder().encode(process.env.API_JWT_SECRET ?? ""));
+}

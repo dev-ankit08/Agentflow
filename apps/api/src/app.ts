@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import { and, eq, sql } from "drizzle-orm";
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { ZodError } from "zod";
@@ -32,6 +33,7 @@ import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredAppr
 import { approvalLinkRoutes, defaultNotifier, notifyApprovers, type Notifier } from "./approvals";
 import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "./automation";
 import { purgeExpiredCache } from "./cache";
+import { collabRoutes } from "./collab";
 import { sendDueReports } from "./reports";
 import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
@@ -200,6 +202,7 @@ export async function buildApp(opts: AppOptions) {
   };
   app.decorate("deps", deps);
 
+  await app.register(websocket);
   // The builder origin gets credentialed CORS; widget endpoints accept any origin and check it per widget.
   await app.register(cors, {
     delegator: (req, cb) => {
@@ -295,6 +298,7 @@ export async function buildApp(opts: AppOptions) {
       await v1.register((s) => governanceRoutes(s, deps));
       await v1.register((s) => promptRoutes(s, deps));
       await v1.register((s) => roleRoutes(s, deps));
+      await v1.register((s) => collabRoutes(s, { db: opts.db, jwtSecret: opts.jwtSecret }));
       await v1.register((s) => automationRoutes(s, deps));
       await v1.register((s) => hookRoutes(s, deps));
       await v1.register((s) => approvalLinkRoutes(s, { ...deps, jwtSecret: opts.jwtSecret }));

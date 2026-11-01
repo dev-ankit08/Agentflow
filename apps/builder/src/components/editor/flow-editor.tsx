@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateFlow, variableTypes, type FlowInput, type NodeDef, type NodeType } from "@agentflow/flow-schema";
 import { Badge, Button, Input, Select, cn } from "@agentflow/ui";
 import { Row } from "./fields";
+import { useCollab } from "./collab";
 import { Inspector } from "./inspector";
 import type { FlowComment } from "./inspector-orchestration";
 import type { FlowSummary, SourceSummary } from "./inspector-extra";
@@ -102,6 +103,24 @@ function Editor({
 
   const draft = useMemo(() => fromCanvas(base, nodes, edges), [base, nodes, edges]);
   const validation = useMemo(() => validateFlow(draft), [draft]);
+
+  // Live co-editing: edits from others replace the canvas content, keeping this editor's selection.
+  const collab = useCollab({
+    flowId,
+    draft,
+    canEdit,
+    onRemote: (remote) => {
+      const next = toCanvas(remote);
+      setBase(remote);
+      setNodes((prev) => {
+        const selected = new Set(prev.filter((n) => n.selected).map((n) => n.id));
+        return next.nodes.map((n) => ({ ...n, selected: selected.has(n.id) }));
+      });
+      setEdges(next.edges);
+      // What the canvas will produce from this state, so it isn't mistaken for a local edit.
+      return fromCanvas(remote, next.nodes, next.edges);
+    },
+  });
   const issuesByNode = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const e of validation.errors) if (e.nodeId) map.set(e.nodeId, [...(map.get(e.nodeId) ?? []), e.message]);
@@ -219,10 +238,11 @@ function Editor({
   );
 
   useEffect(() => {
-    if (saveState !== "unsaved" || conflict) return;
+    // While live, the API saves the shared document; this editor doesn't autosave.
+    if (saveState !== "unsaved" || conflict || collab.live) return;
     const t = setTimeout(() => void save(), 800);
     return () => clearTimeout(t);
-  }, [saveState, save, conflict]);
+  }, [saveState, save, conflict, collab.live]);
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -395,7 +415,7 @@ function Editor({
       setShowIssues(true);
       return;
     }
-    if (!(await save())) return setNotice({ tone: "danger", text: "Could not save the draft." });
+    if (!(await save(collab.live))) return setNotice({ tone: "danger", text: "Could not save the draft." });
     const res = await fetch(`/api/v1/flows/${flowId}/publish`, { method: "POST" });
     const body = await res.json().catch(() => ({}));
     if (!res.ok)
@@ -442,14 +462,18 @@ function Editor({
           {liveVersion ? `Live v${liveVersion}` : "Not published"}
         </Badge>
         <span className="text-xs text-muted" aria-live="polite">
-          {canEdit
-            ? {
-                saved: "Saved",
-                saving: "Saving…",
-                unsaved: "Unsaved changes",
-                error: conflict ? "Not saved — edit conflict" : "Save failed — retrying on next change",
-              }[saveState]
-            : "View only"}
+          {collab.live
+            ? canEdit
+              ? "● Live · saved automatically"
+              : "● Live · view only"
+            : canEdit
+              ? {
+                  saved: "Saved",
+                  saving: "Saving…",
+                  unsaved: "Unsaved changes",
+                  error: conflict ? "Not saved — edit conflict" : "Save failed — retrying on next change",
+                }[saveState]
+              : "View only"}
         </span>
         {othersEditing.length > 0 && (
           <div className="flex items-center gap-1" aria-label="Also editing">
@@ -540,7 +564,7 @@ function Editor({
           )}
         </div>
       </header>
-      {(conflict || newerElsewhere) && canEdit && (
+      {(conflict || newerElsewhere) && canEdit && !collab.live && (
         <div role="alert" className="flex items-center gap-3 bg-warning/10 px-4 py-2 text-xs text-warning">
           <span className="flex-1">
             {conflict
@@ -708,7 +732,7 @@ function Editor({
       {showTest && (
         <TestConsole
           flowId={flowId}
-          prepare={async () => validation.ok && (await save())}
+          prepare={async () => validation.ok && (await save(collab.live))}
           onStatus={setRunStatus}
           onClose={() => {
             setShowTest(false);
