@@ -56,6 +56,8 @@ export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "PUT /v1/flows/:id/ab-test": "flows.deploy",
   "DELETE /v1/flows/:id/ab-test": "flows.deploy",
   "POST /v1/flows/:id/ab-test/promote": "flows.deploy",
+  "POST /v1/flows/:id/mcp": "flows.deploy",
+  "DELETE /v1/flows/:id/mcp": "flows.deploy",
   "POST /v1/flows/:id/comments": "flows.comment",
   "PATCH /v1/flows/:id/comments/:commentId": "flows.comment",
   "DELETE /v1/flows/:id/comments/:commentId": "flows.comment",

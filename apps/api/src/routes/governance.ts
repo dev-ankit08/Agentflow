@@ -23,6 +23,8 @@ const AUDITED: Record<string, string> = {
   "PUT /v1/flows/:id/ab-test": "Started A/B test",
   "DELETE /v1/flows/:id/ab-test": "Stopped A/B test",
   "POST /v1/flows/:id/ab-test/promote": "Promoted A/B challenger",
+  "POST /v1/flows/:id/mcp": "Enabled MCP server",
+  "DELETE /v1/flows/:id/mcp": "Disabled MCP server",
   "POST /v1/reviews/:id/decide": "Decided review",
   "POST /v1/approvals/:id/decide": "Decided approval",
   "POST /v1/provider-keys": "Added model key",

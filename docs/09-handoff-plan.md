@@ -261,8 +261,18 @@ Estimates are rough engineering days for this codebase.
 17. **Template and connector marketplace (MP-1):** publish, review, rate and install.
 18. **White-label / agency mode (WL-1):** partner → client org → workspace, branding, custom domains, rebilling. The DB
     needs a `partners` table and `orgs.partnerId`.
-19. **Expose flows as MCP servers (MS-1):** a Streamable HTTP MCP endpoint per published flow, with the flow's Start
-    inputs as the tool schema.
+19. **Expose flows as MCP servers (MS-1) — done** on branch `e2e-and-leftovers`. The code is in
+    `apps/api/src/routes/mcp-server.ts`.
+    - Endpoint: `POST /v1/mcp/:flowId` is a stateless Streamable HTTP MCP server with one tool, named after the flow
+      (e.g. `order_support`). It takes `{ message, inputs? }`, runs the live version, and returns the replies, the End
+      output and any pause notice.
+    - Auth: a per-flow bearer token (`afm_…`), stored as a SHA-256 hash and shown once.
+    - Management: `GET`, `POST` (turn on or rotate, optional tool description) and `DELETE /v1/flows/:id/mcp`. These
+      need the `flows.deploy` permission and are audited.
+    - Deploy page: a "Use from other AI tools (MCP)" card with the address, the one-time token, a Claude Code command
+      and a JSON config.
+    - Verified with the official MCP client in tests, and with curl against the live Order support flow.
+    - **Still open:** OAuth for MCP clients, and per-flow input schemas taken from the Start node.
 20. **AI flow generator (AI-1):** plain text → draft flow JSON, validated by `validateFlow` and repaired if invalid.
 21. **Voice channel (VO-1):** WebRTC with STT/TTS.
 22. **Self-host package (SH-1)** and **SOC 2 readiness (SOC-1).**

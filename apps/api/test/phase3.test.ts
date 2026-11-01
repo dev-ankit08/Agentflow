@@ -4,6 +4,8 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { and, eq, like } from "drizzle-orm";
 import { SignJWT } from "jose";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { WebsocketProvider } from "y-websocket";
@@ -701,7 +703,7 @@ describe.skipIf(!url)("Phase 3 API", () => {
 
   it("shares a live document between editors and saves it to the draft", async () => {
     const flowId = await makeFlow("Co-edit", ...echoFlow("Hello"));
-    await app.listen({ port: 0, host: "127.0.0.1" });
+    if (!app.server.listening) await app.listen({ port: 0, host: "127.0.0.1" });
     const port = (app.server.address() as AddressInfo).port;
     const token = (sub: string) =>
       new SignJWT({})
@@ -753,6 +755,43 @@ describe.skipIf(!url)("Phase 3 API", () => {
     });
     expect(closed).toBe(4401);
     a.provider.destroy();
+  });
+
+  it("offers a published flow to other AI tools as an MCP server", async () => {
+    const flowId = await makeFlow("Order helper", ...echoFlow("Order 1042 has shipped."));
+    await publish(flowId);
+    if (!app.server.listening) await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as AddressInfo).port;
+
+    expect((await call(builder.id, "POST", `/v1/flows/${flowId}/mcp`, {})).statusCode).toBe(403);
+    const enabled = (
+      await call(owner.id, "POST", `/v1/flows/${flowId}/mcp`, { description: "Answers order questions" })
+    ).json();
+    expect(enabled).toMatchObject({ toolName: "order_helper" });
+    const url = `http://127.0.0.1:${port}/v1/mcp/${flowId}`;
+    const connect = async (token: string) => {
+      const client = new McpClient({ name: "test", version: "1.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(url), {
+          requestInit: { headers: { authorization: `Bearer ${token}` } },
+        }),
+      );
+      return client;
+    };
+
+    const client = await connect(enabled.token);
+    const { tools } = await client.listTools();
+    expect(tools).toMatchObject([{ name: "order_helper", description: "Answers order questions" }]);
+    const result = await client.callTool({ name: "order_helper", arguments: { message: "Where is order 1042?" } });
+    expect(result.isError).toBeFalsy();
+    expect((result.content as { text: string }[])[0]!.text).toContain("Order 1042 has shipped.");
+    await client.close();
+
+    // Wrong token, then a disabled server: refused.
+    await expect(connect("afm_wrong")).rejects.toThrow();
+    await call(owner.id, "DELETE", `/v1/flows/${flowId}/mcp`);
+    await expect(connect(enabled.token)).rejects.toThrow();
+    expect((await call(owner.id, "GET", `/v1/flows/${flowId}/mcp`)).json()).toMatchObject({ enabled: false });
   });
 
   it("records configuration changes in the audit log", async () => {
