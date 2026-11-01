@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 import { Alert, Button, Card, Field, Input } from "@agentflow/ui";
-import { auth, devLoginEnabled, googleEnabled, DEV_LOGIN_EMAIL } from "@/auth";
+import { auth, devLoginEnabled, emailLinksEnabled, googleEnabled, trialLoginEnabled, DEV_LOGIN_EMAIL } from "@/auth";
 import { Logo } from "@/components/logo";
-import { signInDev, signInWithEmail, signInWithGoogle } from "../actions";
+import { signInDev, signInTrial, signInWithEmail, signInWithGoogle } from "../actions";
 
 export default async function LoginPage({
   searchParams,
@@ -30,18 +30,48 @@ export default async function LoginPage({
         )}
         {error && (
           <div className="mb-4">
-            <Alert>Sign-in failed ({error}). Please try again.</Alert>
+            <Alert>
+              {error === "trial"
+                ? "That access code is not right. Check it with whoever invited you."
+                : `Sign-in failed (${error}). Please try again.`}
+            </Alert>
           </div>
         )}
 
-        <form action={signInWithEmail} className="space-y-3">
-          <Field label="Work email" htmlFor="email">
-            <Input id="email" name="email" type="email" required autoComplete="email" placeholder="you@company.com" />
-          </Field>
-          <Button type="submit" className="w-full">
-            Email me a sign-in link
-          </Button>
-        </form>
+        {trialLoginEnabled && (
+          <form action={signInTrial} className="space-y-3">
+            <Field label="Work email" htmlFor="trial-email">
+              <Input
+                id="trial-email"
+                name="email"
+                type="email"
+                required
+                autoComplete="email"
+                placeholder="you@company.com"
+              />
+            </Field>
+            <Field label="Trial access code" htmlFor="code" hint="The code from whoever invited you to try AgentFlow.">
+              <Input id="code" name="code" type="password" required autoComplete="off" />
+            </Field>
+            <Button type="submit" className="w-full">
+              Start trial
+            </Button>
+          </form>
+        )}
+
+        {emailLinksEnabled && (
+          <form
+            action={signInWithEmail}
+            className={trialLoginEnabled ? "mt-4 space-y-3 border-t border-border pt-4" : "space-y-3"}
+          >
+            <Field label="Work email" htmlFor="email">
+              <Input id="email" name="email" type="email" required autoComplete="email" placeholder="you@company.com" />
+            </Field>
+            <Button type="submit" variant={trialLoginEnabled ? "secondary" : "primary"} className="w-full">
+              Email me a sign-in link
+            </Button>
+          </form>
+        )}
 
         {(googleEnabled || devLoginEnabled) && (
           <div className="mt-4 space-y-2 border-t border-border pt-4">

@@ -1,5 +1,6 @@
 "use server";
 
+import { AuthError } from "next-auth";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -28,6 +29,15 @@ export async function signInWithEmail(form: FormData) {
 }
 export async function signInWithGoogle() {
   await signIn("google", { redirectTo: "/" });
+}
+export async function signInTrial(form: FormData) {
+  try {
+    await signIn("trial", { email: field(form, "email"), code: field(form, "code"), redirectTo: "/" });
+  } catch (error) {
+    // A wrong code or email comes back as an AuthError; the success redirect is rethrown as is.
+    if (error instanceof AuthError) redirect("/login?error=trial");
+    throw error;
+  }
 }
 export async function signInDev() {
   await signIn("dev", { redirectTo: "/" });

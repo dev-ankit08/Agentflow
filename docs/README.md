@@ -29,6 +29,8 @@
 | 6 | [06-go-to-market-and-pricing.md](06-go-to-market-and-pricing.md) | Pricing tiers, competitor matrix, launch plan |
 | 7 | [07-security-and-compliance.md](07-security-and-compliance.md) | Threat model (OWASP LLM Top 10), data flows, compliance roadmap |
 | 8 | [08-integrations-setup.md](08-integrations-setup.md) | Setting up and testing Bedrock, Vertex, Slack, Teams, WhatsApp and Stripe with real credentials |
+| 9 | [09-handoff-plan.md](09-handoff-plan.md) | Handoff notes and the prioritised plan for the next session |
+| 10 | [10-codespaces-trial.md](10-codespaces-trial.md) | Running a free trial for testers on GitHub Codespaces (no install, no admin rights) |
 
 ## Glossary
 

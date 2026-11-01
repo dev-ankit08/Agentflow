@@ -9,6 +9,10 @@ if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 const config: NextConfig = {
   transpilePackages: ["@agentflow/ui", "@agentflow/db", "@agentflow/flow-schema", "@agentflow/expression-engine"],
   serverExternalPackages: ["postgres", "nodemailer"],
+  // Hosted behind a forwarding proxy (e.g. "*.app.github.dev" in Codespaces), server actions see another host.
+  ...(process.env.SERVER_ACTIONS_ALLOWED_ORIGINS && {
+    experimental: { serverActions: { allowedOrigins: process.env.SERVER_ACTIONS_ALLOWED_ORIGINS.split(",") } },
+  }),
   // Standalone output (used by infra/Dockerfile) creates symlinks, which Windows blocks without Developer Mode.
   ...(process.env.NEXT_STANDALONE === "true" && {
     output: "standalone" as const,

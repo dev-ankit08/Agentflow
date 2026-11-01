@@ -135,6 +135,12 @@ Then **Publish**, open **Deploy → Live preview**, and chat with the embedded w
 To use a real model, add a key in **Settings** (Anthropic, OpenAI, Azure OpenAI or OpenAI-compatible) and pick it on
 each AI Agent node.
 
+### Free trial on GitHub Codespaces
+
+Open the repository on GitHub, then **Code → Codespaces → Create codespace**: it installs, builds and starts
+everything, and prints a link and a trial access code to share with testers. Nothing runs on your computer. See
+[docs/10-codespaces-trial.md](docs/10-codespaces-trial.md).
+
 ### With Docker instead
 
 ```bash
