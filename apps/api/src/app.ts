@@ -31,6 +31,7 @@ import { makeGatewayFor, makeGuardedFetch, makeToolsFor } from "./services";
 import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredApprovals } from "./workspace-services";
 import { approvalLinkRoutes, defaultNotifier, notifyApprovers, type Notifier } from "./approvals";
 import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "./automation";
+import { purgeExpiredCache } from "./cache";
 import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
 import { auditHook, governanceRoutes } from "./routes/governance";
@@ -223,6 +224,7 @@ export async function buildApp(opts: AppOptions) {
     if (Date.now() - lastRetention > 3_600_000) {
       lastRetention = Date.now();
       await applyRetention(opts.db).catch((err) => app.log.error({ err }, "retention sweep failed"));
+      await purgeExpiredCache(opts.db).catch((err) => app.log.error({ err }, "cache purge failed"));
     }
   };
   const sweeper = opts.sweepIntervalMs === 0 ? null : setInterval(() => void sweep(), opts.sweepIntervalMs ?? 20_000);

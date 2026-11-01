@@ -71,6 +71,13 @@
       "when": 1793525392207,
       "tag": "0009_colorful_metal_master",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793525910604,
+      "tag": "0010_opposite_roland_deschain",
+      "breakpoints": true
     }
   ]
 }

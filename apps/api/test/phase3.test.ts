@@ -1,9 +1,9 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { Server } from "node:http";
-import { eq, like } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, flows, orgs, runs, users } from "@agentflow/db";
+import { createDb, flows, orgs, runSteps, runs, users } from "@agentflow/db";
 import type { FlowInput } from "@agentflow/flow-schema";
 import { LLMGateway } from "@agentflow/llm-gateway";
 import { startMockLlm } from "@agentflow/llm-gateway/mock-server";
@@ -527,6 +527,64 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect(list.map((p: { name: string }) => p.name)).toContain("Friendly tone");
     expect((await call(builder.id, "DELETE", `/v1/prompts/${id}`)).statusCode).toBe(204);
     expect((await call(builder.id, "PUT", `/v1/prompts/${id}`, { name: "x", body: "y" })).statusCode).toBe(404);
+  });
+
+  it("answers repeated and reworded questions from the response cache", async () => {
+    const flowId = await makeFlow(
+      "Cached FAQ",
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "faq",
+          type: "agent",
+          label: "FAQ",
+          position: at,
+          config: {
+            model: { provider: "openai_compatible", name: "mock-1" },
+            systemPrompt: "Answer store questions.",
+            userPrompt: "{{trigger.message}}",
+          },
+        },
+        { id: "end", type: "end", label: "End", position: at, config: { message: "{{faq.text}}" } },
+      ],
+      [
+        { id: "1", source: "start", target: "faq" },
+        { id: "2", source: "faq", target: "end" },
+      ],
+    );
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    await publish(flowId);
+    const ask = async (message: string) => {
+      const res = await app.inject({ method: "POST", url: `/v1/widget/${widgetKey}/sessions`, payload: { message } });
+      const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+      const [step] = await db
+        .select()
+        .from(runSteps)
+        .where(and(eq(runSteps.runId, runId), eq(runSteps.nodeId, "faq")));
+      return step!;
+    };
+
+    // Off by default.
+    await ask("Opening hours today?");
+    expect((await ask("Opening hours today?")).model).toBe("openai_compatible/mock-1");
+
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      cache: { enabled: true, ttlHours: 24, similar: true },
+      embedding: { provider: "openai_compatible", name: "mock-embed" },
+    });
+    expect((await ask("Opening hours today?")).model).toBe("openai_compatible/mock-1"); // stored
+    const exact = await ask("  opening HOURS today?");
+    expect(exact).toMatchObject({ model: "cache (openai_compatible/mock-1)", tokensIn: 0 });
+    const reworded = await ask("Today, opening hours?");
+    expect(reworded.model).toBe("cache (openai_compatible/mock-1)");
+    expect((await ask("Do you ship abroad?")).model).toBe("openai_compatible/mock-1");
+
+    const stats = (await call(owner.id, "GET", "/v1/workspace/settings")).json().cache;
+    expect(stats.hits).toBeGreaterThanOrEqual(2);
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      cache: { enabled: false, ttlHours: 24, similar: false },
+      embedding: null,
+    });
   });
 
   it("records configuration changes in the audit log", async () => {

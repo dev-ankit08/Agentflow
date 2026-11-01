@@ -4,6 +4,7 @@ import { approvals, flowVersions, flows, handoffs, runSteps, runs, workspaces, t
 import { Flow, validateFlow } from "@agentflow/flow-schema";
 import type { LLMGateway } from "@agentflow/llm-gateway";
 import type { RunExecutor, RuntimeServices, ToolProvider } from "@agentflow/runtime";
+import { cacheService } from "./cache";
 import { searchKnowledge } from "./semantic";
 import { memoryService } from "./automation";
 
@@ -53,6 +54,7 @@ export function makeServicesFor(
 ) {
   return (workspaceId: string): RuntimeServices => ({
     knowledge: { search: (q, o) => searchKnowledge(db, workspaceId, q, o, gatewayFor(workspaceId)) },
+    cache: cacheService(db, gatewayFor(workspaceId), workspaceId),
     approvals: {
       async request(input) {
         const [row] = await db
@@ -98,6 +100,8 @@ export function makeSandboxServicesFor(db: Db, gatewayFor: (workspaceId: string)
   return (workspaceId: string): RuntimeServices => ({
     ...live(workspaceId),
     memory: { read: memoryService(db, workspaceId).read, write: async () => {} },
+    // Evals test the draft itself, so they never reuse cached answers.
+    cache: undefined,
     approvals: { request: async () => "sandbox" },
     handoffs: { create: async () => "sandbox" },
     checkBudget: async () => {},

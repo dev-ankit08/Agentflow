@@ -239,6 +239,20 @@ export function Inspector({
                 />
                 Fallback model if the main one fails
               </label>
+              <label className="flex items-center gap-2 text-xs text-text">
+                <input
+                  type="checkbox"
+                  disabled={readOnly}
+                  checked={node.config.cache === false}
+                  onChange={(e) =>
+                    set<typeof node>((n) => ({
+                      ...n,
+                      config: { ...n.config, cache: e.target.checked ? false : undefined },
+                    }))
+                  }
+                />
+                Never answer from the response cache (e.g. time-sensitive replies)
+              </label>
               {node.config.fallbackModel && (
                 <ModelPicker
                   label="Fallback model"

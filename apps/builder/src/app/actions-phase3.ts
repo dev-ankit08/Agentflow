@@ -149,3 +149,19 @@ export async function savePrompt(form: FormData) {
 export async function deletePrompt(form: FormData) {
   await attempt("/prompts", () => call(`/v1/prompts/${field(form, "id")}`, "DELETE"), "Prompt deleted");
 }
+
+export async function saveCache(form: FormData) {
+  const enabled = form.get("enabled") === "on";
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        cache: {
+          enabled,
+          ttlHours: Number(field(form, "ttlHours")) || 24,
+          similar: form.get("similar") === "on",
+        },
+      }),
+    enabled ? "Response cache on" : "Response cache off",
+  );
+}

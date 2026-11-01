@@ -5,6 +5,7 @@ import { ModelRef } from "@agentflow/flow-schema";
 import { feedback, flows, runSteps, runs, workspaces, type WorkspaceSettings } from "@agentflow/db";
 import { HttpError, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
+import { cacheStats } from "../cache";
 import { toCsv } from "../csv";
 import { monthUsage } from "../workspace-services";
 
@@ -30,6 +31,13 @@ const WorkspaceSettingsBody = z.object({
         )
         .nullable()
         .optional(),
+    })
+    .optional(),
+  cache: z
+    .object({
+      enabled: z.boolean(),
+      ttlHours: z.number().int().min(1).max(720).default(24),
+      similar: z.boolean().default(false),
     })
     .optional(),
   memoryExtraction: z
@@ -188,7 +196,12 @@ export async function analyticsRoutes(app: FastifyInstance, { db, auth, secrets 
   app.get("/workspace/settings", { preHandler: auth.requireWorkspace("viewer") }, async (req) => {
     const ws = currentWorkspace(req);
     const [row] = await db.select({ settings: workspaces.settings }).from(workspaces).where(eq(workspaces.id, ws.id));
-    return { settings: row?.settings ?? {}, usage: await monthUsage(db, ws.id), defaults: { roi: DEFAULT_ROI } };
+    return {
+      settings: row?.settings ?? {},
+      usage: await monthUsage(db, ws.id),
+      cache: await cacheStats(db, ws.id),
+      defaults: { roi: DEFAULT_ROI },
+    };
   });
 
   app.put("/workspace/settings", { preHandler: auth.requireWorkspace("admin") }, async (req) => {
@@ -201,6 +214,7 @@ export async function analyticsRoutes(app: FastifyInstance, { db, auth, secrets 
     if ("retention" in body) settings.retention = body.retention;
     if ("embedding" in body) settings.embedding = body.embedding ?? undefined;
     if ("memoryExtraction" in body) settings.memoryExtraction = body.memoryExtraction ?? undefined;
+    if (body.cache) settings.cache = body.cache;
     if (body.notifications) {
       const { slackWebhookUrl, emailApprovers } = body.notifications;
       const current = settings.notifications ?? {};

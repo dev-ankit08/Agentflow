@@ -8,6 +8,7 @@ import {
   deleteEndUser,
   indexKnowledgeNow,
   saveEmbedding,
+  saveCache,
   saveMemoryExtraction,
   saveNotifications,
   saveRetention,
@@ -20,7 +21,9 @@ type WsSettings = {
     retention?: { days?: number; zeroRetention?: boolean };
     memoryExtraction?: { enabled: boolean; model: { provider: string; name: string }; idleMinutes: number };
     notifications?: { emailApprovers?: boolean; slackWebhookEnc?: string };
+    cache?: { enabled: boolean; ttlHours: number; similar: boolean };
   };
+  cache: { entries: number; hits: number };
   usage: { usd: number; tokens: number };
   defaults: { roi: { costPerConversation: number; minutesPerConversation: number } };
 };
@@ -73,6 +76,7 @@ export default async function SettingsPage({
   const retention = wsSettings.settings.retention ?? {};
   const memory = wsSettings.settings.memoryExtraction;
   const notifications = wsSettings.settings.notifications ?? {};
+  const cache = wsSettings.settings.cache;
   const index = await apiFetch<IndexStatus>("/v1/knowledge/index", { workspaceId: current.id });
 
   return (
@@ -283,6 +287,53 @@ export default async function SettingsPage({
                   disabled={!isAdmin}
                 />
               </Field>
+              {isAdmin && (
+                <div className="sm:col-span-2">
+                  <Button type="submit">Save</Button>
+                </div>
+              )}
+            </form>
+          </CardBody>
+        </Card>
+
+        <Card id="cache">
+          <CardHeader
+            title="Response cache"
+            description={`Answer repeated questions instead of calling the model again: faster and free. ${wsSettings.cache.entries} cached answer${wsSettings.cache.entries === 1 ? "" : "s"}, reused ${wsSettings.cache.hits} time${wsSettings.cache.hits === 1 ? "" : "s"}.`}
+          />
+          <CardBody>
+            <form action={saveCache} className="grid gap-3 sm:grid-cols-2">
+              <label className="flex items-start gap-2 text-sm text-text sm:col-span-2">
+                <input type="checkbox" name="enabled" defaultChecked={cache?.enabled} disabled={!isAdmin} />
+                <span>
+                  Reuse answers to repeated questions
+                  <span className="block text-xs text-muted">
+                    Only for AI Agents without tools, and only when everything the agent saw matches (prompt, earlier
+                    messages), so personalised answers aren&apos;t shared. Agents can opt out under Advanced; evals
+                    never use it.
+                  </span>
+                </span>
+              </label>
+              <Field label="Keep answers for (hours)" htmlFor="cache-ttl">
+                <Input
+                  id="cache-ttl"
+                  name="ttlHours"
+                  type="number"
+                  min={1}
+                  max={720}
+                  defaultValue={cache?.ttlHours ?? 24}
+                  disabled={!isAdmin}
+                />
+              </Field>
+              <label className="flex items-start gap-2 pt-6 text-sm text-text">
+                <input type="checkbox" name="similar" defaultChecked={cache?.similar} disabled={!isAdmin} />
+                <span>
+                  Also match reworded questions
+                  <span className="block text-xs text-muted">
+                    Uses the embedding model from Semantic knowledge search.
+                  </span>
+                </span>
+              </label>
               {isAdmin && (
                 <div className="sm:col-span-2">
                   <Button type="submit">Save</Button>

@@ -205,9 +205,19 @@ Estimates are rough engineering days for this codebase.
     - Presence, comments and conflict detection already exist; the conflict banner becomes a fallback.
 14. **Scheduled ROI email reports (A-3).** A weekly cron in the sweep renders the Analytics numbers to an HTML email
     sent to admins. Needs the SMTP from item 7.
-15. **Semantic cache (C-3).** In the gateway, before calling the model, look up recent answers with the same flow,
-    node and normalised prompt (exact match first, then embedding similarity over a threshold). Show cache hits in
-    traces and add a per-agent opt-out.
+15. **Semantic cache (C-3) — done** on branch `e2e-and-leftovers`.
+    - The `response_cache` table (migration 0010) and `cacheService` in `apps/api/src/cache.ts` are exposed to the
+      runtime as `services.cache`.
+    - The Agent handler checks the cache before calling the model, only for agents without tools and without
+      `cache: false`. The key is flow, node, model and the exact context: rendered system prompt, earlier turns,
+      output schema and temperature.
+    - The question matches exactly after normalising case and spaces, or with cosine ≥ 0.95 when `similar` is on
+      and an embedding model is set.
+    - Hits cost nothing and appear in traces as model `cache (provider/model)`. Evals never use the cache. Expired
+      entries are purged by the hourly sweep.
+    - Settings → "Response cache" (on/off, hours to keep, reworded matching, hit counts), plus an opt-out per agent
+      under Advanced.
+    - **Still open:** a "clear cache" button, and caching for Supervisor and Parallel nodes.
 16. **SharePoint + Confluence sources and reranking (K-4).** Microsoft Graph / Confluence REST connectors with
     scheduled re-sync (also the K-3 gap: Google Drive and Notion). Rerank with an LLM, or a cross-encoder when one is
     available.
