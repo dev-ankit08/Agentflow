@@ -32,6 +32,7 @@ import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredAppr
 import { approvalLinkRoutes, defaultNotifier, notifyApprovers, type Notifier } from "./approvals";
 import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "./automation";
 import { purgeExpiredCache } from "./cache";
+import { sendDueReports } from "./reports";
 import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
 import { auditHook, governanceRoutes } from "./routes/governance";
@@ -56,6 +57,8 @@ export type RuntimeConfig = {
   publicApiUrl: string;
   /** Tests: process channel messages before answering the webhook. */
   syncChannels: boolean;
+  /** Builder address, for links in emails. */
+  appUrl: string;
 };
 
 export type Deps = {
@@ -70,6 +73,7 @@ export type Deps = {
   channels: Channels;
   channelEndpoints: ChannelEndpoints;
   billing: Billing;
+  notifier: Notifier;
   config: RuntimeConfig;
 };
 
@@ -115,6 +119,7 @@ export async function buildApp(opts: AppOptions) {
   const gatewayFor = makeGatewayFor(opts.db, opts.secrets, opts.prices ?? {});
   const toolsFor = makeToolsFor(opts.db, opts.secrets, pool);
   const publicApiUrl = (opts.publicApiUrl ?? "http://localhost:4000").replace(/\/+$/, "");
+  const appUrl = (opts.appUrl ?? "http://localhost:3100").replace(/\/+$/, "");
   const notifier =
     opts.notifier ??
     defaultNotifier(opts.emailServer, opts.emailFrom ?? "AgentFlow <no-reply@agentflow.local>", (msg) =>
@@ -129,7 +134,7 @@ export async function buildApp(opts: AppOptions) {
         notifier,
         jwtSecret: opts.jwtSecret,
         publicApiUrl,
-        appUrl: (opts.appUrl ?? "http://localhost:3100").replace(/\/+$/, ""),
+        appUrl,
       },
       approvalId,
     ).catch((err) => app.log.warn({ err, approvalId }, "approval notification failed"));
@@ -182,12 +187,14 @@ export async function buildApp(opts: AppOptions) {
     channels,
     channelEndpoints,
     billing,
+    notifier,
     config: {
       API_JWT_SECRET: opts.jwtSecret,
       allowStdioMcp: Boolean(opts.allowStdioMcp),
       allowPrivateHttp: Boolean(opts.allowPrivateHttp),
       publicApiUrl,
       syncChannels: Boolean(opts.syncChannels),
+      appUrl,
     },
   };
   app.decorate("deps", deps);
@@ -226,6 +233,7 @@ export async function buildApp(opts: AppOptions) {
       await applyRetention(opts.db).catch((err) => app.log.error({ err }, "retention sweep failed"));
       await purgeExpiredCache(opts.db).catch((err) => app.log.error({ err }, "cache purge failed"));
     }
+    await sendDueReports(opts.db, notifier, appUrl).catch((err) => app.log.error({ err }, "weekly reports failed"));
   };
   const sweeper = opts.sweepIntervalMs === 0 ? null : setInterval(() => void sweep(), opts.sweepIntervalMs ?? 20_000);
   sweeper?.unref();

@@ -165,3 +165,28 @@ export async function saveCache(form: FormData) {
     enabled ? "Response cache on" : "Response cache off",
   );
 }
+
+export async function saveReports(form: FormData) {
+  const enabled = form.get("enabled") === "on";
+  const extraRecipients = field(form, "extraRecipients")
+    .split(/[,;\s]+/)
+    .map((e) => e.trim())
+    .filter(Boolean);
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        reports: {
+          enabled,
+          weekday: Number(field(form, "weekday")),
+          hourUtc: Number(field(form, "hourUtc")),
+          extraRecipients,
+        },
+      }),
+    enabled ? "Weekly report scheduled" : "Weekly report turned off",
+  );
+}
+
+export async function sendTestReport() {
+  await attempt("/settings", () => call("/v1/reports/send-test", "POST"), "Test report sent to your email");
+}

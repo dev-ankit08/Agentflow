@@ -203,8 +203,17 @@ Estimates are rough engineering days for this codebase.
     - Add Yjs: a `y-websocket`-style endpoint on the API (Fastify websocket) and the editor's nodes and edges in a Y.Doc.
     - Keep autosave of the draft JSON.
     - Presence, comments and conflict detection already exist; the conflict banner becomes a fallback.
-14. **Scheduled ROI email reports (A-3).** A weekly cron in the sweep renders the Analytics numbers to an HTML email
-    sent to admins. Needs the SMTP from item 7.
+14. **Scheduled ROI email reports (A-3) — done** on branch `e2e-and-leftovers`. The code is in
+    `apps/api/src/reports.ts`.
+    - `sendDueReports` runs in the API sweep. On the workspace's chosen weekday and hour (UTC), it emails owners,
+      admins and extra recipients once that day. `lastSentAt` is recorded before sending, so a restart can't double
+      send.
+    - The report (`buildReport`) covers the last 7 days against the previous 7: conversations, automation, hours
+      and net savings, AI cost, satisfaction and the busiest flows, with a dashboard link.
+    - The numbers come from `analyticsSummary` (now shared with the dashboard and the CSV export).
+    - `POST /v1/reports/send-test` emails the caller; it answers 409 when `EMAIL_SERVER` is not set.
+    - Settings → "Weekly report".
+    - **Still open:** daily or monthly schedules, and per-recipient time zones.
 15. **Semantic cache (C-3) — done** on branch `e2e-and-leftovers`.
     - The `response_cache` table (migration 0010) and `cacheService` in `apps/api/src/cache.ts` are exposed to the
       runtime as `services.cache`.

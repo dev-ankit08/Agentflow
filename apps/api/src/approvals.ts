@@ -12,6 +12,8 @@ import type { Channels } from "./channels";
 export type Notifier = {
   sendMail(msg: { to: string; subject: string; text: string; html: string }): Promise<void>;
   postSlack(webhookUrl: string, body: { text: string }): Promise<void>;
+  /** False when no SMTP server is set, so emails are only logged. Omitted means emails are delivered. */
+  emailConfigured?: boolean;
 };
 
 /** SMTP via EMAIL_SERVER (e.g. smtp://user:pass@host:587). Without it, emails are skipped with a log line. */
@@ -22,6 +24,7 @@ export function defaultNotifier(
 ): Notifier {
   const transport = emailServer ? createTransport(emailServer) : null;
   return {
+    emailConfigured: Boolean(transport),
     async sendMail(msg) {
       if (!transport) return log(`EMAIL_SERVER is not set; skipped approval email to ${msg.to}`);
       await transport.sendMail({ from: emailFrom, ...msg });

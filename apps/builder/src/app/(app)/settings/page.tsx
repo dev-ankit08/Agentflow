@@ -9,6 +9,8 @@ import {
   indexKnowledgeNow,
   saveEmbedding,
   saveCache,
+  saveReports,
+  sendTestReport,
   saveMemoryExtraction,
   saveNotifications,
   saveRetention,
@@ -22,6 +24,7 @@ type WsSettings = {
     memoryExtraction?: { enabled: boolean; model: { provider: string; name: string }; idleMinutes: number };
     notifications?: { emailApprovers?: boolean; slackWebhookEnc?: string };
     cache?: { enabled: boolean; ttlHours: number; similar: boolean };
+    reports?: { enabled: boolean; weekday: number; hourUtc: number; extraRecipients: string[]; lastSentAt?: string };
   };
   cache: { entries: number; hits: number };
   usage: { usd: number; tokens: number };
@@ -77,6 +80,8 @@ export default async function SettingsPage({
   const memory = wsSettings.settings.memoryExtraction;
   const notifications = wsSettings.settings.notifications ?? {};
   const cache = wsSettings.settings.cache;
+  const reports = wsSettings.settings.reports;
+  const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const index = await apiFetch<IndexStatus>("/v1/knowledge/index", { workspaceId: current.id });
 
   return (
@@ -293,6 +298,62 @@ export default async function SettingsPage({
                 </div>
               )}
             </form>
+          </CardBody>
+        </Card>
+
+        <Card id="reports">
+          <CardHeader
+            title="Weekly report"
+            description={`Email owners and admins a summary of the last 7 days: conversations, automation, hours and money saved.${reports?.lastSentAt ? ` Last sent ${new Date(reports.lastSentAt).toLocaleString()}.` : ""}`}
+          />
+          <CardBody className="space-y-3">
+            <form action={saveReports} className="grid gap-3 sm:grid-cols-3">
+              <label className="flex items-center gap-2 text-sm text-text sm:col-span-3">
+                <input type="checkbox" name="enabled" defaultChecked={reports?.enabled} disabled={!isAdmin} />
+                Send the weekly report
+              </label>
+              <Field label="Day" htmlFor="report-day">
+                <Select id="report-day" name="weekday" defaultValue={String(reports?.weekday ?? 1)} disabled={!isAdmin}>
+                  {weekdays.map((d, i) => (
+                    <option key={d} value={i}>
+                      {d}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Hour (UTC)" htmlFor="report-hour">
+                <Input
+                  id="report-hour"
+                  name="hourUtc"
+                  type="number"
+                  min={0}
+                  max={23}
+                  defaultValue={reports?.hourUtc ?? 8}
+                  disabled={!isAdmin}
+                />
+              </Field>
+              <Field label="Also send to" htmlFor="report-extra" hint="Comma-separated emails, e.g. your CFO.">
+                <Input
+                  id="report-extra"
+                  name="extraRecipients"
+                  defaultValue={(reports?.extraRecipients ?? []).join(", ")}
+                  disabled={!isAdmin}
+                />
+              </Field>
+              {isAdmin && (
+                <div className="sm:col-span-3">
+                  <Button type="submit">Save</Button>
+                </div>
+              )}
+            </form>
+            {isAdmin && (
+              <form action={sendTestReport} className="flex items-center gap-2 text-xs text-muted">
+                <Button type="submit" size="sm" variant="secondary">
+                  Send me a test report
+                </Button>
+                Needs EMAIL_SERVER (SMTP) on the API.
+              </form>
+            )}
           </CardBody>
         </Card>
 

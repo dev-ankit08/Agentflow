@@ -12,6 +12,7 @@ import { buildApp } from "../src/app";
 import { TOKEN_AUDIENCE, TOKEN_ISSUER } from "../src/auth";
 import { applyRetention, chooseVersion, extractMemories, resumeDueTimers, runSchedules } from "../src/automation";
 import { loadRootEnv } from "../src/config";
+import { sendDueReports } from "../src/reports";
 import { clusterQuestions } from "../src/routes/governance";
 
 // End-to-end Phase 3 features over a real Postgres and the mock model. Skipped without DATABASE_URL.
@@ -584,6 +585,41 @@ describe.skipIf(!url)("Phase 3 API", () => {
     await call(owner.id, "PUT", "/v1/workspace/settings", {
       cache: { enabled: false, ttlHours: 24, similar: false },
       embedding: null,
+    });
+  });
+
+  it("emails weekly ROI reports to admins once on the chosen day", async () => {
+    const monday9 = new Date("2026-11-02T09:15:00Z"); // a Monday
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      reports: { enabled: true, weekday: 1, hourUtc: 8, extraRecipients: ["ceo@example.com"] },
+    });
+    mails.length = 0;
+    const { notifier } = app.deps;
+    // Wrong day, then too early in the day: nothing is sent.
+    await sendDueReports(db, notifier, "http://localhost:3100", new Date("2026-11-03T09:15:00Z"));
+    await sendDueReports(db, notifier, "http://localhost:3100", new Date("2026-11-02T07:15:00Z"));
+    expect(mails.filter((m) => [owner.email, "ceo@example.com"].includes(m.to))).toHaveLength(0);
+
+    await sendDueReports(db, notifier, "http://localhost:3100", monday9);
+    const mine = mails.filter((m) => [owner.email, builder.email, "ceo@example.com"].includes(m.to));
+    // Owners/admins and extra recipients get it; builders don't.
+    expect(mine.map((m) => m.to).sort()).toEqual(["ceo@example.com", owner.email].sort());
+    expect(mine[0]!.subject).toMatch(/^Default weekly report: \d+ conversations/);
+    expect(mine[0]!.text).toContain("Hours saved");
+    expect(mine[0]!.text).toContain("http://localhost:3100/analytics?days=7");
+
+    // Once per day, even if the sweep runs again.
+    mails.length = 0;
+    await sendDueReports(db, notifier, "http://localhost:3100", new Date("2026-11-02T10:00:00Z"));
+    expect(mails.filter((m) => m.to === owner.email)).toHaveLength(0);
+
+    // "Send me a test report" goes to the caller only.
+    const test = await call(owner.id, "POST", "/v1/reports/send-test");
+    expect(test.json()).toMatchObject({ sent: 1 });
+    expect(mails.at(-1)?.to).toBe(owner.email);
+    expect((await call(builder.id, "POST", "/v1/reports/send-test")).statusCode).toBe(403);
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      reports: { enabled: false, weekday: 1, hourUtc: 8, extraRecipients: [] },
     });
   });
 
