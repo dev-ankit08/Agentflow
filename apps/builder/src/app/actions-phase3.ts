@@ -101,3 +101,19 @@ export async function saveMemoryExtraction(form: FormData) {
     enabled ? "Customers' conversations will be remembered" : "Background memory turned off",
   );
 }
+
+export async function saveNotifications(form: FormData) {
+  const url = field(form, "slackWebhookUrl");
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        notifications: {
+          emailApprovers: form.get("emailApprovers") === "on",
+          // Empty keeps the saved webhook; "Remove" clears it.
+          ...(form.get("removeSlack") === "on" ? { slackWebhookUrl: null } : url ? { slackWebhookUrl: url } : {}),
+        },
+      }),
+    "Approval notifications saved",
+  );
+}

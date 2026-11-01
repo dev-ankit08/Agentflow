@@ -25,6 +25,9 @@ const ConfigSchema = z.object({
   ALLOW_STDIO_MCP: z.stringbool().default(false),
   /** Public address of this API (webhook URLs for Slack, Teams, WhatsApp and Stripe). */
   PUBLIC_API_URL: z.string().optional(),
+  /** SMTP for approval emails, e.g. smtp://user:pass@smtp.example.com:587 (skipped when unset). */
+  EMAIL_SERVER: z.string().optional(),
+  EMAIL_FROM: z.string().default("AgentFlow <no-reply@agentflow.local>"),
   /** Stripe billing (optional; billing is off and unlimited without STRIPE_SECRET_KEY). */
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),

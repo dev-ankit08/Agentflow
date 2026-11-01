@@ -16,6 +16,21 @@ const WorkspaceSettingsBody = z.object({
   retention: z
     .object({ days: z.number().int().min(1).max(3650).optional(), zeroRetention: z.boolean().optional() })
     .optional(),
+  notifications: z
+    .object({
+      emailApprovers: z.boolean(),
+      /** Slack incoming-webhook URL; null removes it, omitted keeps the saved one. */
+      slackWebhookUrl: z
+        .string()
+        .trim()
+        .regex(
+          /^https:\/\/hooks\.slack\.com\/services\//,
+          "Use a Slack incoming-webhook URL (https://hooks.slack.com/services/…)",
+        )
+        .nullable()
+        .optional(),
+    })
+    .optional(),
   memoryExtraction: z
     .object({ enabled: z.boolean(), model: ModelRef, idleMinutes: z.number().int().min(1).max(1440).default(30) })
     .nullable()
@@ -37,7 +52,7 @@ const FlowSettingsBody = z.object({
 const DEFAULT_ROI = { costPerConversation: 6, minutesPerConversation: 8 };
 
 /** ROI dashboard (H4), workspace budget and baseline settings (H11), per-flow publish rules. */
-export async function analyticsRoutes(app: FastifyInstance, { db, auth }: Deps) {
+export async function analyticsRoutes(app: FastifyInstance, { db, auth, secrets }: Deps) {
   app.get<{ Querystring: { days?: string } }>(
     "/analytics",
     { preHandler: auth.requireWorkspace("viewer") },
@@ -153,6 +168,19 @@ export async function analyticsRoutes(app: FastifyInstance, { db, auth }: Deps) 
     if ("retention" in body) settings.retention = body.retention;
     if ("embedding" in body) settings.embedding = body.embedding ?? undefined;
     if ("memoryExtraction" in body) settings.memoryExtraction = body.memoryExtraction ?? undefined;
+    if (body.notifications) {
+      const { slackWebhookUrl, emailApprovers } = body.notifications;
+      const current = settings.notifications ?? {};
+      settings.notifications = {
+        emailApprovers,
+        slackWebhookEnc:
+          slackWebhookUrl === null
+            ? undefined
+            : slackWebhookUrl
+              ? secrets.encrypt(slackWebhookUrl)
+              : current.slackWebhookEnc,
+      };
+    }
     await db.update(workspaces).set({ settings }).where(eq(workspaces.id, ws.id));
     return { settings };
   });

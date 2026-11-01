@@ -46,7 +46,11 @@ export async function loadWorkspaceFlow(db: Db, workspaceId: string, flowId: str
 }
 
 /** Services for live runs: real inbox items, knowledge, budgets. */
-export function makeServicesFor(db: Db, gatewayFor: (workspaceId: string) => LLMGateway) {
+export function makeServicesFor(
+  db: Db,
+  gatewayFor: (workspaceId: string) => LLMGateway,
+  onApprovalRequested?: (approvalId: string) => void,
+) {
   return (workspaceId: string): RuntimeServices => ({
     knowledge: { search: (q, o) => searchKnowledge(db, workspaceId, q, o, gatewayFor(workspaceId)) },
     approvals: {
@@ -55,6 +59,7 @@ export function makeServicesFor(db: Db, gatewayFor: (workspaceId: string) => LLM
           .insert(approvals)
           .values({ workspaceId, ...input })
           .returning({ id: approvals.id });
+        onApprovalRequested?.(row!.id);
         return row!.id;
       },
     },

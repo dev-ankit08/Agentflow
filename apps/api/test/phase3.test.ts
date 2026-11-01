@@ -53,6 +53,8 @@ describe.skipIf(!url)("Phase 3 API", () => {
   let llm: Server;
   let workspaceId = "";
   let orgId = "";
+  const mails: { to: string; subject: string; text: string }[] = [];
+  const slackPosts: { url: string; text: string }[] = [];
 
   const call = async (as: string, method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: object) => {
     const token = await new SignJWT({})
@@ -102,6 +104,10 @@ describe.skipIf(!url)("Phase 3 API", () => {
       corsOrigin: "http://localhost:3100",
       allowPrivateHttp: true,
       sweepIntervalMs: 0,
+      notifier: {
+        sendMail: async (m) => void mails.push(m),
+        postSlack: async (url, body) => void slackPosts.push({ url, text: body.text }),
+      },
     });
     await db.insert(users).values([owner, builder]);
     const ws = (await call(owner.id, "POST", "/v1/orgs", { orgName: "Phase3" })).json();
@@ -388,6 +394,86 @@ describe.skipIf(!url)("Phase 3 API", () => {
     const [again] = await db.select().from(runs).where(eq(runs.id, runId));
     expect(again?.memoryExtractedAt?.getTime()).toBe(row?.memoryExtractedAt?.getTime());
     await call(owner.id, "PUT", "/v1/workspace/settings", { memoryExtraction: null });
+  });
+
+  it("notifies approvers by email and Slack, with signed links that decide on confirmation", async () => {
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      notifications: { emailApprovers: true, slackWebhookUrl: "https://hooks.slack.com/services/T0/B0/xyz" },
+    });
+    const flowId = await makeFlow(
+      "Approve me",
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "ok",
+          type: "approval",
+          label: "Check",
+          position: at,
+          config: { message: "Refund 40 for {{trigger.message}}" },
+        },
+        { id: "yes", type: "end", label: "Yes", position: at, config: { message: "Approved!" } },
+        { id: "no", type: "end", label: "No", position: at, config: { message: "Declined" } },
+      ],
+      [
+        { id: "1", source: "start", target: "ok" },
+        { id: "2", source: "ok", sourceHandle: "approved", target: "yes" },
+        { id: "3", source: "ok", sourceHandle: "rejected", target: "no" },
+        { id: "4", source: "ok", sourceHandle: "timeout", target: "no" },
+      ],
+    );
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    await publish(flowId);
+    mails.length = 0;
+    slackPosts.length = 0;
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/widget/${widgetKey}/sessions`,
+      payload: { message: "order 9" },
+    });
+    const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+    // Every member at or above the approver role (reviewer) is emailed: here the owner and the builder.
+    await expect.poll(() => mails.length).toBe(2);
+    expect(mails.map((m) => m.to).sort()).toEqual([builder.email, owner.email].sort());
+    const ownerMail = mails.find((m) => m.to === owner.email)!;
+    expect(ownerMail.subject).toBe("Approval needed: Approve me");
+    expect(ownerMail.text).toContain("Refund 40 for order 9");
+    expect(slackPosts[0]).toMatchObject({ url: "https://hooks.slack.com/services/T0/B0/xyz" });
+    expect(slackPosts[0]!.text).toContain("Refund 40 for order 9");
+
+    const approveLink = new URL(/Approve: (\S+)/.exec(ownerMail.text)![1]!);
+    const path = approveLink.pathname + approveLink.search;
+    // Opening the link only shows a confirmation page.
+    const confirm = await app.inject({ method: "GET", url: path });
+    expect(confirm.body).toContain("Approve this request?");
+    let [run] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(run?.status).toBe("waiting_approval");
+
+    // A tampered link is refused; the real one decides on POST.
+    const form = Object.fromEntries(approveLink.searchParams);
+    const tampered = await app.inject({
+      method: "POST",
+      url: approveLink.pathname,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ ...form, d: "reject" }).toString(),
+    });
+    expect(tampered.statusCode).toBe(403);
+    const decided = await app.inject({
+      method: "POST",
+      url: approveLink.pathname,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ ...form, note: "fine" }).toString(),
+    });
+    expect(decided.body).toContain("Approved");
+    [run] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(run?.status).toBe("waiting_input");
+    expect((await app.inject({ method: "GET", url: path })).body).toContain("Already decided");
+
+    // Slack can be removed while keeping email.
+    await call(owner.id, "PUT", "/v1/workspace/settings", {
+      notifications: { emailApprovers: true, slackWebhookUrl: null },
+    });
+    const settings = (await call(owner.id, "GET", "/v1/workspace/settings")).json().settings;
+    expect(settings.notifications).toEqual({ emailApprovers: true });
   });
 
   it("records configuration changes in the audit log", async () => {

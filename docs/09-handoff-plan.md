@@ -154,9 +154,18 @@ Estimates are rough engineering days for this codebase.
      - Multipart uploads (SendGrid inbound parse, browser form uploads) and PDF or Office text extraction.
      - Salesforce outbound messages and Platform Events.
      - Batch mode for schedules (use a Loop node meanwhile).
-7. **Approval notifications (H-2).** Notify approvers of new Inbox items by email (SMTP via `nodemailer`, Mailpit for
-   local testing) and by Slack interactive message if a Slack channel is connected. Approve/reject links use a signed
-   token.
+7. **Approval notifications (H-2) — done** on branch `e2e-and-leftovers`. The code is in `apps/api/src/approvals.ts`.
+   - When an Approval node pauses a live run, `notifyApprovers` emails every member at or above the approver role,
+     through SMTP (`EMAIL_SERVER`, skipped with a log line when unset). It can also post to a Slack incoming webhook
+     (stored encrypted in `settings.notifications`).
+   - Emails carry per-approver signed links (`/v1/approval-links/:id`, HMAC with `API_JWT_SECRET`, valid 7 days).
+     Opening a link shows a confirmation page, and only the POST decides, so mail scanners can't approve anything.
+   - The Inbox and the links share `decideApproval`.
+   - Settings → "Approval notifications" holds the options.
+   - **Still open:**
+     - Interactive Slack buttons (needs a Slack app with interactivity, not an incoming webhook).
+     - Notifying handoffs.
+     - Testing with a real SMTP server (Mailpit works locally: `EMAIL_SERVER=smtp://localhost:1025`).
 8. **Eval CSV import (V-1) and ROI CSV export (A-2).** Add a CSV upload on the evals dataset page and an export button
    on Analytics. Follow the pattern of the audit CSV export in `governance.ts`.
 9. **Prompt library and prompt diff (P-1).** Save and reuse prompts per workspace, and show a side-by-side diff between

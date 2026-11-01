@@ -9,6 +9,7 @@ import {
   indexKnowledgeNow,
   saveEmbedding,
   saveMemoryExtraction,
+  saveNotifications,
   saveRetention,
 } from "../../actions-phase3";
 
@@ -18,6 +19,7 @@ type WsSettings = {
     roi?: { costPerConversation: number; minutesPerConversation: number };
     retention?: { days?: number; zeroRetention?: boolean };
     memoryExtraction?: { enabled: boolean; model: { provider: string; name: string }; idleMinutes: number };
+    notifications?: { emailApprovers?: boolean; slackWebhookEnc?: string };
   };
   usage: { usd: number; tokens: number };
   defaults: { roi: { costPerConversation: number; minutesPerConversation: number } };
@@ -70,6 +72,7 @@ export default async function SettingsPage({
       : null;
   const retention = wsSettings.settings.retention ?? {};
   const memory = wsSettings.settings.memoryExtraction;
+  const notifications = wsSettings.settings.notifications ?? {};
   const index = await apiFetch<IndexStatus>("/v1/knowledge/index", { workspaceId: current.id });
 
   return (
@@ -343,6 +346,62 @@ export default async function SettingsPage({
                 )}
               </div>
             )}
+          </CardBody>
+        </Card>
+
+        <Card id="notifications">
+          <CardHeader
+            title="Approval notifications"
+            description="Tell people when a conversation is waiting for their approval."
+          />
+          <CardBody>
+            <form action={saveNotifications} className="grid gap-3">
+              <label className="flex items-start gap-2 text-sm text-text">
+                <input
+                  type="checkbox"
+                  name="emailApprovers"
+                  defaultChecked={notifications.emailApprovers !== false}
+                  disabled={!isAdmin}
+                />
+                <span>
+                  Email everyone who can approve
+                  <span className="block text-xs text-muted">
+                    With one-click Approve and Reject links (each asks for confirmation, and they expire after 7 days).
+                    Needs EMAIL_SERVER (SMTP) to be set on the API.
+                  </span>
+                </span>
+              </label>
+              <Field
+                label="Slack channel (incoming webhook URL)"
+                htmlFor="slackWebhookUrl"
+                hint={
+                  notifications.slackWebhookEnc
+                    ? "A webhook is saved. Paste a new URL to replace it."
+                    : "Create one under your Slack app → Incoming Webhooks. The message links to the Inbox."
+                }
+              >
+                <Input
+                  id="slackWebhookUrl"
+                  name="slackWebhookUrl"
+                  type="password"
+                  autoComplete="off"
+                  placeholder={
+                    notifications.slackWebhookEnc ? "•••••••• (saved)" : "https://hooks.slack.com/services/…"
+                  }
+                  disabled={!isAdmin}
+                />
+              </Field>
+              {notifications.slackWebhookEnc && isAdmin && (
+                <label className="flex items-center gap-2 text-sm text-text">
+                  <input type="checkbox" name="removeSlack" /> Stop posting to Slack
+                </label>
+              )}
+              {isAdmin && (
+                <div>
+                  <Button type="submit">Save</Button>
+                </div>
+              )}
+            </form>
           </CardBody>
         </Card>
 

@@ -29,6 +29,7 @@ import { inboxRoutes } from "./routes/inbox";
 import { knowledgeRoutes } from "./routes/knowledge";
 import { makeGatewayFor, makeGuardedFetch, makeToolsFor } from "./services";
 import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredApprovals } from "./workspace-services";
+import { approvalLinkRoutes, defaultNotifier, notifyApprovers, type Notifier } from "./approvals";
 import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "./automation";
 import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
@@ -89,6 +90,13 @@ export type AppOptions = {
   /** Stripe billing; omitted when STRIPE_SECRET_KEY is not set. */
   stripe?: StripeConfig | null;
   logger?: FastifyServerOptions["logger"];
+  /** Builder address, for links in notifications. */
+  appUrl?: string;
+  /** SMTP URL for approval emails (EMAIL_SERVER); emails are skipped without it. */
+  emailServer?: string;
+  emailFrom?: string;
+  /** Replaces email/Slack delivery (tests). */
+  notifier?: Notifier;
 };
 
 declare module "fastify" {
@@ -104,6 +112,25 @@ export async function buildApp(opts: AppOptions) {
   const store = new DbRunStore(opts.db);
   const gatewayFor = makeGatewayFor(opts.db, opts.secrets, opts.prices ?? {});
   const toolsFor = makeToolsFor(opts.db, opts.secrets, pool);
+  const publicApiUrl = (opts.publicApiUrl ?? "http://localhost:4000").replace(/\/+$/, "");
+  const notifier =
+    opts.notifier ??
+    defaultNotifier(opts.emailServer, opts.emailFrom ?? "AgentFlow <no-reply@agentflow.local>", (msg) =>
+      app.log.info(msg),
+    );
+  // New approvals notify approvers by email and Slack, without holding up the conversation.
+  const onApprovalRequested = (approvalId: string) =>
+    void notifyApprovers(
+      {
+        db: opts.db,
+        secrets: opts.secrets,
+        notifier,
+        jwtSecret: opts.jwtSecret,
+        publicApiUrl,
+        appUrl: (opts.appUrl ?? "http://localhost:3100").replace(/\/+$/, ""),
+      },
+      approvalId,
+    ).catch((err) => app.log.warn({ err, approvalId }, "approval notification failed"));
   const fetchImpl = makeGuardedFetch(Boolean(opts.allowPrivateHttp));
   const executor =
     opts.executor ??
@@ -111,7 +138,7 @@ export async function buildApp(opts: AppOptions) {
       store,
       gatewayFor,
       toolsFor,
-      servicesFor: makeServicesFor(opts.db, gatewayFor),
+      servicesFor: makeServicesFor(opts.db, gatewayFor, onApprovalRequested),
       fetch: fetchImpl,
     });
   // Eval runs: same flows, but write tools are simulated and nothing reaches the inbox.
@@ -157,7 +184,7 @@ export async function buildApp(opts: AppOptions) {
       API_JWT_SECRET: opts.jwtSecret,
       allowStdioMcp: Boolean(opts.allowStdioMcp),
       allowPrivateHttp: Boolean(opts.allowPrivateHttp),
-      publicApiUrl: (opts.publicApiUrl ?? "http://localhost:4000").replace(/\/+$/, ""),
+      publicApiUrl,
       syncChannels: Boolean(opts.syncChannels),
     },
   };
@@ -177,7 +204,7 @@ export async function buildApp(opts: AppOptions) {
     await sweepExpiredApprovals(opts.db, executor).catch((err) => app.log.error({ err }, "approval sweep failed"));
     await resumeDueTimers(opts.db, executor).catch((err) => app.log.error({ err }, "timer sweep failed"));
     await runSchedules(opts.db, executor).catch((err) => app.log.error({ err }, "schedule sweep failed"));
-    const services = makeServicesFor(opts.db, gatewayFor);
+    const services = makeServicesFor(opts.db, gatewayFor, onApprovalRequested);
     await extractMemories(opts.db, gatewayFor, async (ws) => services(ws).checkBudget?.()).catch((err) =>
       app.log.error({ err }, "memory extraction failed"),
     );
@@ -256,6 +283,7 @@ export async function buildApp(opts: AppOptions) {
       await v1.register((s) => governanceRoutes(s, deps));
       await v1.register((s) => automationRoutes(s, deps));
       await v1.register((s) => hookRoutes(s, deps));
+      await v1.register((s) => approvalLinkRoutes(s, { ...deps, jwtSecret: opts.jwtSecret }));
     },
     { prefix: "/v1" },
   );

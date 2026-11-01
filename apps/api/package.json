@@ -23,13 +23,15 @@
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.7",
     "jose": "^6.2.14",
+    "nodemailer": "^7.0.7",
     "postgres": "^3.4.9",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@agentflow/widget": "workspace:*",
+    "@types/nodemailer": "^7.0.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.6",
-    "vitest": "^3.2.7",
-    "@agentflow/widget": "workspace:*"
+    "vitest": "^3.2.7"
   }
 }

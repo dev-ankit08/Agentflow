@@ -17,6 +17,8 @@ export type WorkspaceSettings = {
   /** Embedding model for semantic knowledge search (H7); full-text search only when unset. */
   embedding?: { provider: "openai" | "azure_openai" | "openai_compatible"; name: string };
   /** Learn facts about signed-in customers from finished or idle conversations (H7). */
+  /** Who hears about new approvals (H5): approvers by email, and optionally a Slack channel. */
+  notifications?: { emailApprovers?: boolean; slackWebhookEnc?: string };
   memoryExtraction?: {
     enabled: boolean;
     model: ModelRef;
