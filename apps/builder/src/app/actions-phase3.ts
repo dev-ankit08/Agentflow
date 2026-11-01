@@ -117,3 +117,17 @@ export async function saveNotifications(form: FormData) {
     "Approval notifications saved",
   );
 }
+
+export async function importEvalCases(form: FormData) {
+  const flowId = field(form, "flowId");
+  const file = form.get("file");
+  const csv = file instanceof File ? await file.text() : "";
+  let summary = "";
+  await attempt(`/flows/${flowId}/evals`, async () => {
+    if (!csv.trim()) throw new ApiError(400, "Choose a CSV file to import");
+    const res = await call(`/v1/evals/${field(form, "datasetId")}/cases/import`, "POST", { csv });
+    const { added, skipped } = res as { added: number; skipped: number };
+    summary = `Imported ${added} case${added === 1 ? "" : "s"}${skipped ? ` (${skipped} rows without an input skipped)` : ""}`;
+  });
+  redirect(`/flows/${flowId}/evals?ok=${encodeURIComponent(summary)}`);
+}

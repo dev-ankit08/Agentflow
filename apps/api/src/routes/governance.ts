@@ -4,6 +4,7 @@ import { auditEvents, feedback, memories, runs, type Db } from "@agentflow/db";
 import { currentWorkspace } from "../auth";
 import type { Deps } from "../app";
 import { audit } from "../automation";
+import { csvCell } from "../csv";
 
 /** Readable names for audited routes. Routes not listed here (drafts, test runs, searches, comments) are not audited. */
 const AUDITED: Record<string, string> = {
@@ -39,11 +40,6 @@ const AUDITED: Record<string, string> = {
   "PUT /v1/workspace/settings": "Changed workspace settings",
   "POST /v1/templates/:slug/install": "Installed template",
   "DELETE /v1/end-users/:id": "Deleted end-user data",
-};
-
-const csvCell = (v: unknown) => {
-  const s = v == null ? "" : typeof v === "string" ? v : v instanceof Date ? v.toISOString() : JSON.stringify(v);
-  return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
 };
 
 /** Records every successful configuration change once the response is sent. Bodies are never stored. */

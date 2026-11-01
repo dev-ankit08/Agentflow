@@ -7,6 +7,7 @@ import { Flow, nextCronRun, parseCron } from "@agentflow/flow-schema";
 import { HttpError, currentUser, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
 import { automationOf, type FlowAutomation } from "../automation";
+import { parseCsv } from "../csv";
 import { makeLive } from "./publish";
 
 const WebhookBody = z.object({
@@ -352,40 +353,6 @@ export async function automationRoutes(app: FastifyInstance, { db, auth, secrets
 }
 
 const MAX_BATCH = 500;
-
-/** Minimal RFC 4180 CSV parser: quoted fields, escaped quotes, CRLF. The first row is the header. */
-export function parseCsv(text: string): Record<string, string>[] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (quoted) {
-      if (ch === '"' && text[i + 1] === '"') {
-        field += '"';
-        i++;
-      } else if (ch === '"') quoted = false;
-      else field += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === ",") {
-      row.push(field);
-      field = "";
-    } else if (ch === "\n" || ch === "\r") {
-      if (ch === "\r" && text[i + 1] === "\n") i++;
-      row.push(field);
-      if (row.some((c) => c !== "")) rows.push(row);
-      row = [];
-      field = "";
-    } else field += ch;
-  }
-  row.push(field);
-  if (row.some((c) => c !== "")) rows.push(row);
-  const [header, ...data] = rows;
-  if (!header) return [];
-  const keys = header.map((h) => h.trim());
-  return data.map((r) => Object.fromEntries(keys.map((k, i) => [k, (r[i] ?? "").trim()])));
-}
 
 /** Request bodies arrive as raw strings so signatures can be checked over the exact bytes. */
 const rawBody = (req: FastifyRequest) => (typeof req.body === "string" ? req.body : "");

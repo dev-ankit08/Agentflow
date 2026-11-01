@@ -8,6 +8,7 @@ import type { RunEvent } from "@agentflow/runtime";
 import { HttpError, currentUser, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
 import { hashDraft } from "../workspace-services";
+import { parseCsv, toCsv } from "../csv";
 
 const Expected = z.object({
   contains: z.string().trim().max(500).optional(),
@@ -15,6 +16,15 @@ const Expected = z.object({
   rubric: z.string().trim().max(2000).optional(),
 });
 const NewCase = z.object({ input: z.string().trim().min(1).max(4000), expected: Expected.default({}) });
+const ImportCases = z.object({ csv: z.string().min(1).max(2_000_000) });
+const MAX_IMPORT = 1000;
+/** Accepted column names (case-insensitive) for each field of a case. */
+const COLUMNS = {
+  input: ["input", "question", "message", "prompt"],
+  contains: ["contains", "expected", "expected_contains", "must_contain"],
+  outcome: ["outcome", "expected_outcome"],
+  rubric: ["rubric", "criteria", "judge"],
+} as const;
 const RunEvals = z.object({ judgeModel: ModelRef.optional() });
 
 export type Score = { name: string; pass: boolean; score?: number; reason?: string };
@@ -132,6 +142,62 @@ export async function evalRoutes(app: FastifyInstance, { db, auth, evalExecutor,
       const flow = await findFlow(ws.id, req.params.id);
       const [ds] = await db.insert(evalDatasets).values({ workspaceId: ws.id, flowId: flow.id, name }).returning();
       return reply.code(201).send(ds);
+    },
+  );
+
+  /**
+   * Bulk-adds cases from CSV: an input column (input/question/message/prompt) plus optional contains, outcome and
+   * rubric columns. Rows without an input are skipped.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/evals/:id/cases/import",
+    { preHandler: auth.requireWorkspace("builder") },
+    async (req, reply) => {
+      const { csv } = ImportCases.parse(req.body);
+      const ds = await findDataset(currentWorkspace(req).id, req.params.id);
+      const rows = parseCsv(csv);
+      if (rows.length === 0) throw new HttpError(400, "The CSV has no rows (the first line must be the column names)");
+      if (rows.length > MAX_IMPORT) throw new HttpError(413, `Import up to ${MAX_IMPORT} cases at a time`);
+      const headers = Object.keys(rows[0]!);
+      const column = (field: keyof typeof COLUMNS) =>
+        headers.find((h) => (COLUMNS[field] as readonly string[]).includes(h.toLowerCase()));
+      const inputCol = column("input");
+      if (!inputCol) throw new HttpError(400, `Add an "input" column (found: ${headers.join(", ") || "none"})`);
+      const [containsCol, outcomeCol, rubricCol] = [column("contains"), column("outcome"), column("rubric")];
+      const cases = rows
+        .filter((r) => r[inputCol]?.trim())
+        .map((r) => {
+          const expected = Expected.parse({
+            contains: (containsCol && r[containsCol]) || undefined,
+            outcome: (outcomeCol && r[outcomeCol]) || undefined,
+            rubric: (rubricCol && r[rubricCol]) || undefined,
+          });
+          return { datasetId: ds.id, input: r[inputCol]!.slice(0, 4000), expected };
+        });
+      if (cases.length) await db.insert(evalCases).values(cases);
+      return reply.code(201).send({ added: cases.length, skipped: rows.length - cases.length });
+    },
+  );
+
+  /** The dataset's cases as CSV, in the same columns the import accepts. */
+  app.get<{ Params: { id: string } }>(
+    "/evals/:id/cases.csv",
+    { preHandler: auth.requireWorkspace("viewer") },
+    async (req, reply) => {
+      const ds = await findDataset(currentWorkspace(req).id, req.params.id);
+      const cases = await db
+        .select()
+        .from(evalCases)
+        .where(eq(evalCases.datasetId, ds.id))
+        .orderBy(evalCases.createdAt);
+      const csv = toCsv(
+        ["input", "contains", "outcome", "rubric"],
+        cases.map((c) => [c.input, c.expected.contains, c.expected.outcome, c.expected.rubric]),
+      );
+      return reply
+        .header("content-type", "text/csv; charset=utf-8")
+        .header("content-disposition", `attachment; filename="eval-cases-${ds.id}.csv"`)
+        .send(csv);
     },
   );
 

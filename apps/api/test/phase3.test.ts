@@ -476,6 +476,33 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect(settings.notifications).toEqual({ emailApprovers: true });
   });
 
+  it("imports and exports eval cases as CSV, and exports analytics as CSV", async () => {
+    const flowId = await makeFlow("CSV evals", ...echoFlow("Hi"));
+    const ds = (await call(owner.id, "POST", `/v1/flows/${flowId}/evals`, { name: "Imported" })).json();
+    // Excel-style file: byte-order mark, alias column names, quoted commas, a blank-input row.
+    const csv =
+      '﻿Question,Expected,Outcome\n"Where is order 12, please?",shipped,resolved\n,ignored,\nRefund?,,escalated\n';
+    const imported = await call(owner.id, "POST", `/v1/evals/${ds.id}/cases/import`, { csv });
+    expect(imported.statusCode).toBe(201);
+    expect(imported.json()).toEqual({ added: 2, skipped: 1 });
+    expect(
+      (await call(owner.id, "POST", `/v1/evals/${ds.id}/cases/import`, { csv: "foo,bar\n1,2\n" })).statusCode,
+    ).toBe(400);
+
+    const exported = await call(owner.id, "GET", `/v1/evals/${ds.id}/cases.csv`);
+    expect(exported.headers["content-type"]).toContain("text/csv");
+    expect(exported.body.split("\n")).toEqual([
+      "input,contains,outcome,rubric",
+      '"Where is order 12, please?",shipped,resolved,',
+      "Refund?,,escalated,",
+    ]);
+
+    const daily = await call(owner.id, "GET", "/v1/analytics?days=7&format=csv");
+    expect(daily.body.split("\n")[0]).toBe("day,conversations,automated,hours_saved,gross_savings_usd");
+    const byFlow = await call(owner.id, "GET", "/v1/analytics?days=7&format=csv&table=flows");
+    expect(byFlow.body.split("\n")[0]).toBe("flow,conversations,automated,escalated,automation_rate");
+  });
+
   it("records configuration changes in the audit log", async () => {
     await call(owner.id, "PUT", "/v1/workspace/settings", { retention: { days: 90 } });
     const log = (await call(owner.id, "GET", "/v1/audit")).json();

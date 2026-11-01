@@ -5,6 +5,7 @@ import { ModelRef } from "@agentflow/flow-schema";
 import { feedback, flows, runSteps, runs, workspaces, type WorkspaceSettings } from "@agentflow/db";
 import { HttpError, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
+import { toCsv } from "../csv";
 import { monthUsage } from "../workspace-services";
 
 const WorkspaceSettingsBody = z.object({
@@ -53,10 +54,10 @@ const DEFAULT_ROI = { costPerConversation: 6, minutesPerConversation: 8 };
 
 /** ROI dashboard (H4), workspace budget and baseline settings (H11), per-flow publish rules. */
 export async function analyticsRoutes(app: FastifyInstance, { db, auth, secrets }: Deps) {
-  app.get<{ Querystring: { days?: string } }>(
+  app.get<{ Querystring: { days?: string; format?: string; table?: string } }>(
     "/analytics",
     { preHandler: auth.requireWorkspace("viewer") },
-    async (req) => {
+    async (req, reply) => {
       const ws = currentWorkspace(req);
       const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
       const since = new Date(Date.now() - days * 86_400_000);
@@ -125,6 +126,38 @@ export async function analyticsRoutes(app: FastifyInstance, { db, auth, secrets 
       const withOutcome = t.resolved + t.escalated + t.converted + t.failed;
       const automated = t.resolved + t.converted;
       const aiCostUsd = Number(t.aiCostUsd);
+      if (req.query.format === "csv") {
+        // CSV export: per-day ROI (default) or per-flow totals (?table=flows).
+        const csv =
+          req.query.table === "flows"
+            ? toCsv(
+                ["flow", "conversations", "automated", "escalated", "automation_rate"],
+                byFlow.map((f) => [
+                  f.name,
+                  f.runs,
+                  f.resolved,
+                  f.escalated,
+                  f.runs ? (f.resolved / f.runs).toFixed(3) : "",
+                ]),
+              )
+            : toCsv(
+                ["day", "conversations", "automated", "hours_saved", "gross_savings_usd"],
+                daily.map((d) => [
+                  d.day,
+                  d.runs,
+                  d.resolved,
+                  ((d.resolved * baseline.minutesPerConversation) / 60).toFixed(2),
+                  (d.resolved * baseline.costPerConversation).toFixed(2),
+                ]),
+              );
+        return reply
+          .header("content-type", "text/csv; charset=utf-8")
+          .header(
+            "content-disposition",
+            `attachment; filename="analytics-${req.query.table === "flows" ? "flows" : "daily"}-${days}d.csv"`,
+          )
+          .send(csv);
+      }
       return {
         days,
         totals: {

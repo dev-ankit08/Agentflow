@@ -166,8 +166,14 @@ Estimates are rough engineering days for this codebase.
      - Interactive Slack buttons (needs a Slack app with interactivity, not an incoming webhook).
      - Notifying handoffs.
      - Testing with a real SMTP server (Mailpit works locally: `EMAIL_SERVER=smtp://localhost:1025`).
-8. **Eval CSV import (V-1) and ROI CSV export (A-2).** Add a CSV upload on the evals dataset page and an export button
-   on Analytics. Follow the pattern of the audit CSV export in `governance.ts`.
+8. **Eval CSV import (V-1) and ROI CSV export (A-2) — done** on branch `e2e-and-leftovers`.
+   - The shared CSV helpers (`parseCsv`, `toCsv`, `csvCell`) are in `apps/api/src/csv.ts`.
+   - `POST /v1/evals/:id/cases/import` takes `{ csv }` with an input column (aliases: question, message, prompt) and
+     optional contains, outcome and rubric columns. It handles Excel's byte-order mark, up to 1000 rows, and skips
+     rows with no input.
+   - `GET /v1/evals/:id/cases.csv` exports the same columns.
+   - `GET /v1/analytics?format=csv` exports per-day ROI; `&table=flows` exports per-flow totals.
+   - The UI has an import form and a download link on each dataset, and "Export CSV: by day · by flow" on Analytics.
 9. **Prompt library and prompt diff (P-1).** Save and reuse prompts per workspace, and show a side-by-side diff between
    versions (the version diff page already exists).
 10. **Shopify (PL-1, rest).** Build a theme app extension that injects the widget script and passes the customer
