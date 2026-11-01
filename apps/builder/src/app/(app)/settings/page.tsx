@@ -4,13 +4,20 @@ import { apiFetch } from "@/lib/api";
 import { can, requireWorkspace } from "@/lib/context";
 import { addProviderKey, cancelInvite, changeRole, deleteProviderKey, inviteMember, removeMember } from "../../actions";
 import { saveWorkspaceSettings } from "../../actions-phase2";
-import { deleteEndUser, indexKnowledgeNow, saveEmbedding, saveRetention } from "../../actions-phase3";
+import {
+  deleteEndUser,
+  indexKnowledgeNow,
+  saveEmbedding,
+  saveMemoryExtraction,
+  saveRetention,
+} from "../../actions-phase3";
 
 type WsSettings = {
   settings: {
     budget?: { monthlyUsd?: number; monthlyTokens?: number };
     roi?: { costPerConversation: number; minutesPerConversation: number };
     retention?: { days?: number; zeroRetention?: boolean };
+    memoryExtraction?: { enabled: boolean; model: { provider: string; name: string }; idleMinutes: number };
   };
   usage: { usd: number; tokens: number };
   defaults: { roi: { costPerConversation: number; minutesPerConversation: number } };
@@ -62,6 +69,7 @@ export default async function SettingsPage({
       ? await apiFetch<EndUser>(`/v1/end-users/${encodeURIComponent(endUserQuery.trim())}`, { workspaceId: current.id })
       : null;
   const retention = wsSettings.settings.retention ?? {};
+  const memory = wsSettings.settings.memoryExtraction;
   const index = await apiFetch<IndexStatus>("/v1/knowledge/index", { workspaceId: current.id });
 
   return (
@@ -335,6 +343,70 @@ export default async function SettingsPage({
                 )}
               </div>
             )}
+          </CardBody>
+        </Card>
+
+        <Card id="memory">
+          <CardHeader
+            title="Customer memory"
+            description="Learn facts about signed-in customers from their conversations, so Memory nodes can recall them next time."
+          />
+          <CardBody>
+            <form action={saveMemoryExtraction} className="grid gap-3 sm:grid-cols-2">
+              <label className="flex items-start gap-2 text-sm text-text sm:col-span-2">
+                <input type="checkbox" name="enabled" defaultChecked={memory?.enabled} disabled={!isAdmin} />
+                <span>
+                  Learn from conversations in the background
+                  <span className="block text-xs text-muted">
+                    Only for customers signed in with an identity token. Facts are visible and erasable under Customer
+                    data requests.
+                  </span>
+                </span>
+              </label>
+              <Field label="Provider" htmlFor="mem-provider">
+                <Select
+                  id="mem-provider"
+                  name="provider"
+                  defaultValue={memory?.model.provider ?? "openai_compatible"}
+                  disabled={!isAdmin}
+                >
+                  {Object.entries(providerLabels).map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Model" htmlFor="mem-model" hint="A small, cheap model is enough.">
+                <Input
+                  id="mem-model"
+                  name="model"
+                  required
+                  defaultValue={memory?.model.name ?? "mock-1"}
+                  disabled={!isAdmin}
+                />
+              </Field>
+              <Field
+                label="Learn after a conversation is quiet for (minutes)"
+                htmlFor="mem-idle"
+                hint="It runs again if the customer comes back to the same conversation."
+              >
+                <Input
+                  id="mem-idle"
+                  name="idleMinutes"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  defaultValue={memory?.idleMinutes ?? 30}
+                  disabled={!isAdmin}
+                />
+              </Field>
+              {isAdmin && (
+                <div className="sm:col-span-2">
+                  <Button type="submit">Save</Button>
+                </div>
+              )}
+            </form>
           </CardBody>
         </Card>
 

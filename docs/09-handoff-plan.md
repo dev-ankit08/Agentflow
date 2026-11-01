@@ -130,11 +130,16 @@ Estimates are rough engineering days for this codebase.
      - pgvector for large knowledge bases.
      - Reusing the embedder for insights clustering (IN-1, still keyword-based in `clusterQuestions`) and for the
        semantic cache (C-3).
-5. **Memory background extraction (MEM-1).**
-   1. After a chat run ends or goes idle (e.g. 30 min after the last message), extract facts with a model and call
-      `memoryService.write`.
-   2. Run it from the API sweep in `app.ts`, alongside `resumeDueTimers`.
-   3. Add a per-workspace setting to turn it on or off, and a model choice.
+5. **Memory background extraction (MEM-1) — done** on branch `e2e-and-leftovers`.
+   - `extractMemories` in `apps/api/src/automation.ts` runs in the API sweep. For workspaces with
+     `settings.memoryExtraction.enabled`, it finds live conversations with a signed-in end user that have been quiet
+     for `idleMinutes` (default 30). It extracts facts with the shared `extractFacts` (runtime; also used by the
+     Memory node) and writes them to memory, de-duplicated.
+   - Each run gets `runs.memory_extracted_at` (migration 0008), so it is processed again only if the conversation
+     continued.
+   - Workspaces over their AI budget are skipped. A failing model is not retried until the conversation continues.
+   - Settings → "Customer memory" turns it on and picks the model and idle time.
+   - **Still open:** extraction cost is not added to the run's cost or the monthly usage figures.
 6. **More triggers (TR-1).**
    - **Inbound email:** a `POST /v1/inbound/email/:key` webhook in the SendGrid/Mailgun inbound-parse format.
    - **File drop:** an upload endpoint, and the file text goes into `trigger.file`.

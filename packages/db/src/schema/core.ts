@@ -1,3 +1,4 @@
+import type { ModelRef } from "@agentflow/flow-schema";
 import { index, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { newId } from "../ids";
 import { users } from "./auth";
@@ -15,6 +16,13 @@ export type WorkspaceSettings = {
   retention?: { days?: number; zeroRetention?: boolean };
   /** Embedding model for semantic knowledge search (H7); full-text search only when unset. */
   embedding?: { provider: "openai" | "azure_openai" | "openai_compatible"; name: string };
+  /** Learn facts about signed-in customers from finished or idle conversations (H7). */
+  memoryExtraction?: {
+    enabled: boolean;
+    model: ModelRef;
+    /** Minutes without activity before a conversation is mined. */
+    idleMinutes: number;
+  };
 };
 
 const createdAt = () => timestamp("created_at", { mode: "date", withTimezone: true }).defaultNow().notNull();

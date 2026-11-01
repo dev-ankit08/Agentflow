@@ -10,5 +10,6 @@ export {
 } from "./executor";
 export { MemoryRunStore, DbRunStore, scrubState } from "./stores";
 export { handlers } from "./handlers";
+export { extractFacts } from "./handlers-orchestration";
 export { redactPII, redactDeep } from "./redact";
 export { runGuardrail, untrusted } from "./guardrails";

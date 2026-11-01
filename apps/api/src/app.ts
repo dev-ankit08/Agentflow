@@ -29,7 +29,7 @@ import { inboxRoutes } from "./routes/inbox";
 import { knowledgeRoutes } from "./routes/knowledge";
 import { makeGatewayFor, makeGuardedFetch, makeToolsFor } from "./services";
 import { makeSandboxServicesFor, makeServicesFor, sandboxTools, sweepExpiredApprovals } from "./workspace-services";
-import { applyRetention, resumeDueTimers, runSchedules } from "./automation";
+import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "./automation";
 import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
 import { auditHook, governanceRoutes } from "./routes/governance";
@@ -177,6 +177,10 @@ export async function buildApp(opts: AppOptions) {
     await sweepExpiredApprovals(opts.db, executor).catch((err) => app.log.error({ err }, "approval sweep failed"));
     await resumeDueTimers(opts.db, executor).catch((err) => app.log.error({ err }, "timer sweep failed"));
     await runSchedules(opts.db, executor).catch((err) => app.log.error({ err }, "schedule sweep failed"));
+    const services = makeServicesFor(opts.db, gatewayFor);
+    await extractMemories(opts.db, gatewayFor, async (ws) => services(ws).checkBudget?.()).catch((err) =>
+      app.log.error({ err }, "memory extraction failed"),
+    );
     // Knowledge added or re-synced since the last sweep, or a new embedding model, gets indexed in the background.
     const embedding = await opts.db
       .select({ id: workspaces.id })

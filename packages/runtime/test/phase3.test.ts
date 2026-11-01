@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Flow, type FlowInput } from "@agentflow/flow-schema";
 import { LLMGateway, mockProvider } from "@agentflow/llm-gateway";
-import { InProcessExecutor, MemoryRunStore, type RunEvent, type RuntimeServices } from "../src";
+import { InProcessExecutor, MemoryRunStore, extractFacts, type RunEvent, type RuntimeServices } from "../src";
 
 const mockModel = { provider: "openai_compatible" as const, name: "mock-1" };
 const at = { x: 0, y: 0 };
@@ -326,5 +326,28 @@ describe("Memory node", () => {
       t.emit,
     );
     expect((await t.store.load(anon))!.state.nodeOutputs.mem).toMatchObject({ skipped: "No signed-in end user" });
+  });
+});
+
+describe("extractFacts", () => {
+  it("returns the model's facts and usage", async () => {
+    const gateway = new LLMGateway({
+      resolveCredentials: async () => ({ apiKey: "k" }),
+      providers: {
+        openai_compatible: {
+          id: "openai_compatible",
+          chat: async () => ({
+            text: '{"facts":["Prefers email","  ","Has two dogs"]}',
+            toolCalls: [],
+            usage: { inputTokens: 30, outputTokens: 8 },
+            stopReason: "stop",
+          }),
+        },
+      },
+    });
+    const res = await extractFacts(gateway, mockModel, [
+      { role: "user", content: "Email me please, I'm out walking my two dogs" },
+    ]);
+    expect(res).toMatchObject({ facts: ["Prefers email", "Has two dogs"], tokensIn: 30, tokensOut: 8 });
   });
 });

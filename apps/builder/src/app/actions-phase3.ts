@@ -85,3 +85,19 @@ export async function saveEmbedding(form: FormData) {
 export async function indexKnowledgeNow() {
   await attempt("/settings", () => call("/v1/knowledge/index", "POST"), "Knowledge indexed");
 }
+
+export async function saveMemoryExtraction(form: FormData) {
+  const enabled = form.get("enabled") === "on";
+  await attempt(
+    "/settings",
+    () =>
+      call("/v1/workspace/settings", "PUT", {
+        memoryExtraction: {
+          enabled,
+          model: { provider: field(form, "provider"), name: field(form, "model") },
+          idleMinutes: Number(field(form, "idleMinutes")) || 30,
+        },
+      }),
+    enabled ? "Customers' conversations will be remembered" : "Background memory turned off",
+  );
+}

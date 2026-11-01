@@ -5,11 +5,12 @@ import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, flows, orgs, runs, users } from "@agentflow/db";
 import type { FlowInput } from "@agentflow/flow-schema";
+import { LLMGateway } from "@agentflow/llm-gateway";
 import { startMockLlm } from "@agentflow/llm-gateway/mock-server";
 import { createSecretStore } from "@agentflow/secret-store";
 import { buildApp } from "../src/app";
 import { TOKEN_AUDIENCE, TOKEN_ISSUER } from "../src/auth";
-import { applyRetention, chooseVersion, resumeDueTimers, runSchedules } from "../src/automation";
+import { applyRetention, chooseVersion, extractMemories, resumeDueTimers, runSchedules } from "../src/automation";
 import { loadRootEnv } from "../src/config";
 import { clusterQuestions } from "../src/routes/governance";
 
@@ -253,6 +254,66 @@ describe.skipIf(!url)("Phase 3 API", () => {
       memories: [],
       conversations: 0,
     });
+  });
+
+  it("learns facts from idle conversations in the background, once per new activity", async () => {
+    const flowId = await makeFlow("Remembering", ...echoFlow("Noted!"));
+    const { widgetKey } = (await call(owner.id, "GET", `/v1/flows/${flowId}/widget`)).json();
+    await publish(flowId);
+    const { secret } = (await call(owner.id, "POST", `/v1/flows/${flowId}/widget/identity-secret`)).json();
+    const identityToken = await new SignJWT({})
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(`mem_${run}`)
+      .sign(new TextEncoder().encode(secret));
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/widget/${widgetKey}/sessions`,
+      payload: { message: "Please only contact me by email", identityToken },
+    });
+    const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
+
+    const saved = await call(owner.id, "PUT", "/v1/workspace/settings", {
+      memoryExtraction: {
+        enabled: true,
+        model: { provider: "openai_compatible", name: "fact-model" },
+        idleMinutes: 30,
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    // A stand-in model that always finds one fact.
+    const gateway = new LLMGateway({
+      resolveCredentials: async () => ({ apiKey: "k" }),
+      providers: {
+        openai_compatible: {
+          id: "openai_compatible",
+          chat: async () => ({
+            text: '{"facts":["Prefers to be contacted by email"]}',
+            toolCalls: [],
+            usage: { inputTokens: 1, outputTokens: 1 },
+            stopReason: "stop",
+          }),
+        },
+      },
+    });
+    const noBudgetLimit = async () => {};
+
+    // Not yet idle long enough.
+    await extractMemories(db, () => gateway, noBudgetLimit);
+    let [row] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(row?.memoryExtractedAt).toBeNull();
+
+    const later = new Date(Date.now() + 31 * 60_000);
+    await extractMemories(db, () => gateway, noBudgetLimit, later);
+    [row] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(row?.memoryExtractedAt).toBeTruthy();
+    const facts = (await call(owner.id, "GET", `/v1/end-users/mem_${run}`)).json().memories;
+    expect(facts.map((m: { fact: string }) => m.fact)).toEqual(["Prefers to be contacted by email"]);
+
+    // Already learned and no new activity: not processed again.
+    await extractMemories(db, () => gateway, noBudgetLimit, new Date(Date.now() + 62 * 60_000));
+    const [again] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(again?.memoryExtractedAt?.getTime()).toBe(row?.memoryExtractedAt?.getTime());
+    await call(owner.id, "PUT", "/v1/workspace/settings", { memoryExtraction: null });
   });
 
   it("records configuration changes in the audit log", async () => {

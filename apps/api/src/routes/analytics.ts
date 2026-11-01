@@ -1,6 +1,7 @@
 import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { ModelRef } from "@agentflow/flow-schema";
 import { feedback, flows, runSteps, runs, workspaces, type WorkspaceSettings } from "@agentflow/db";
 import { HttpError, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
@@ -14,6 +15,10 @@ const WorkspaceSettingsBody = z.object({
   roi: z.object({ costPerConversation: z.number().min(0), minutesPerConversation: z.number().min(0) }).optional(),
   retention: z
     .object({ days: z.number().int().min(1).max(3650).optional(), zeroRetention: z.boolean().optional() })
+    .optional(),
+  memoryExtraction: z
+    .object({ enabled: z.boolean(), model: ModelRef, idleMinutes: z.number().int().min(1).max(1440).default(30) })
+    .nullable()
     .optional(),
   embedding: z
     .object({
@@ -147,6 +152,7 @@ export async function analyticsRoutes(app: FastifyInstance, { db, auth }: Deps) 
     if ("roi" in body) settings.roi = body.roi;
     if ("retention" in body) settings.retention = body.retention;
     if ("embedding" in body) settings.embedding = body.embedding ?? undefined;
+    if ("memoryExtraction" in body) settings.memoryExtraction = body.memoryExtraction ?? undefined;
     await db.update(workspaces).set({ settings }).where(eq(workspaces.id, ws.id));
     return { settings };
   });

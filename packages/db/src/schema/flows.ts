@@ -92,6 +92,8 @@ export const runs = pgTable(
     costUsd: numeric("cost_usd", { precision: 12, scale: 6 }).default("0").notNull(),
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
     endedAt: timestamp("ended_at", { mode: "date", withTimezone: true }),
+    /** When the background job last learned facts about the end user from this conversation. */
+    memoryExtractedAt: timestamp("memory_extracted_at", { mode: "date", withTimezone: true }),
   },
   (t) => [index("runs_ws_idx").on(t.workspaceId, t.startedAt), index("runs_flow_idx").on(t.flowId)],
 );

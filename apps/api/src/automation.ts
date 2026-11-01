@@ -1,8 +1,9 @@
 import { and, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
-import { auditEvents, flowVersions, flows, memories, runs, workspaces, type Db } from "@agentflow/db";
+import { auditEvents, flowVersions, flows, memories, runSteps, runs, workspaces, type Db } from "@agentflow/db";
 import { Flow, cronMatches, parseCron } from "@agentflow/flow-schema";
-import { scrubState, type RunExecutor, type RunState, type RuntimeServices } from "@agentflow/runtime";
+import type { LLMGateway } from "@agentflow/llm-gateway";
+import { extractFacts, scrubState, type RunExecutor, type RunState, type RuntimeServices } from "@agentflow/runtime";
 
 /** Per-flow automation settings kept in `flows.settings` next to the widget settings. */
 export type FlowAutomation = {
@@ -199,4 +200,64 @@ export async function applyRetention(db: Db, now = new Date()) {
     }
   }
   return { deleted, scrubbed };
+}
+
+/**
+ * Learns facts about signed-in customers from conversations that finished or went quiet (H7): for workspaces with
+ * memory extraction on, each live conversation idle for `idleMinutes` is summarised into facts once, and again only
+ * if it continued afterwards. Runs over budget are skipped until the budget allows.
+ */
+export async function extractMemories(
+  db: Db,
+  gatewayFor: (workspaceId: string) => LLMGateway,
+  checkBudget: (workspaceId: string) => Promise<void>,
+  now = new Date(),
+  limit = 10,
+) {
+  const enabled = await db
+    .select({ id: workspaces.id, settings: workspaces.settings })
+    .from(workspaces)
+    .where(sql`(${workspaces.settings}->'memoryExtraction'->>'enabled')::boolean is true`);
+  let processed = 0;
+  let stored = 0;
+  for (const ws of enabled) {
+    const cfg = ws.settings.memoryExtraction!;
+    try {
+      await checkBudget(ws.id);
+    } catch {
+      continue;
+    }
+    const cutoff = new Date(now.getTime() - Math.max(1, cfg.idleMinutes) * 60_000);
+    const lastActivity = sql<Date>`(select max(${runSteps.endedAt}) from ${runSteps} where ${runSteps.runId} = ${runs.id})`;
+    const due = await db
+      .select({ id: runs.id, endUserId: runs.endUserId, state: runs.state })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.workspaceId, ws.id),
+          isNotNull(runs.endUserId),
+          isNotNull(runs.flowVersionId),
+          eq(runs.sandbox, false),
+          inArray(runs.status, ["waiting_input", "completed", "handed_off"]),
+          sql`${lastActivity} < ${cutoff.toISOString()}::timestamptz`,
+          sql`(${runs.memoryExtractedAt} is null or ${runs.memoryExtractedAt} < ${lastActivity})`,
+        ),
+      )
+      .limit(limit);
+    for (const run of due) {
+      processed++;
+      const conversation = (run.state as unknown as RunState).conversation ?? [];
+      try {
+        if (conversation.some((t) => t.role === "user")) {
+          const { facts } = await extractFacts(gatewayFor(ws.id), cfg.model, conversation);
+          if (facts.length) await memoryService(db, ws.id).write(run.endUserId!, facts);
+          stored += facts.length;
+        }
+      } catch {
+        // A failing model is retried only when the conversation continues, so a bad key can't loop every sweep.
+      }
+      await db.update(runs).set({ memoryExtractedAt: now }).where(eq(runs.id, run.id));
+    }
+  }
+  return { processed, stored };
 }
