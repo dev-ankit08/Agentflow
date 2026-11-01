@@ -34,6 +34,9 @@ const ConfigSchema = z.object({
   STRIPE_PRICE_PRO: z.string().optional(),
   STRIPE_PRICE_BUSINESS: z.string().optional(),
   ALLOW_PRIVATE_HTTP: z.stringbool().default(false),
+  /** Hosted trials: the bundled demo model / orders server, added to workspaces without their own (e.g. Codespaces). */
+  TRIAL_DEMO_MODEL_URL: z.string().optional(),
+  TRIAL_DEMO_MCP_URL: z.string().optional(),
   /** Optional model prices, USD per million tokens: {"model-name": {"input": 3, "output": 15}}. */
   LLM_PRICES_JSON: z
     .string()
