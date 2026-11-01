@@ -32,7 +32,9 @@ const values = {
   AUTH_URL: url(3100),
   PUBLIC_API_URL: url(4000),
   API_URL: "http://localhost:4000",
-  SERVER_ACTIONS_ALLOWED_ORIGINS: host(3100) ?? "",
+  // The Codespaces proxy sends Origin: localhost:3100 with x-forwarded-host set to the public address, so server
+  // actions must accept both.
+  SERVER_ACTIONS_ALLOWED_ORIGINS: name ? `${host(3100)},localhost:3100` : "",
   AUTH_DEV_LOGIN: "false",
   // The bundled demo model and orders server run on localhost inside the codespace.
   ALLOW_PRIVATE_HTTP: "true",
