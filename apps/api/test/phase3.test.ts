@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
 import type { Server } from "node:http";
 import { and, eq, like } from "drizzle-orm";
 import { SignJWT } from "jose";
@@ -12,6 +13,7 @@ import { buildApp } from "../src/app";
 import { TOKEN_AUDIENCE, TOKEN_ISSUER } from "../src/auth";
 import { applyRetention, chooseVersion, extractMemories, resumeDueTimers, runSchedules } from "../src/automation";
 import { loadRootEnv } from "../src/config";
+import { ROUTE_PERMISSIONS } from "../src/permissions";
 import { sendDueReports } from "../src/reports";
 import { clusterQuestions } from "../src/routes/governance";
 
@@ -621,6 +623,75 @@ describe.skipIf(!url)("Phase 3 API", () => {
     await call(owner.id, "PUT", "/v1/workspace/settings", {
       reports: { enabled: false, weekday: 1, hourUtc: 8, extraRecipients: [] },
     });
+  });
+
+  it("checks members with custom roles against the role's permissions", async () => {
+    const lead = await call(owner.id, "POST", "/v1/roles", {
+      name: "Support lead",
+      baseRole: "viewer",
+      permissions: ["inbox.decide", "flows.comment", "audit.view"],
+    });
+    expect(lead.statusCode).toBe(201);
+    expect(
+      (await call(owner.id, "POST", "/v1/roles", { name: "Support lead", baseRole: "viewer", permissions: [] }))
+        .statusCode,
+    ).toBe(409);
+    expect(
+      (await call(builder.id, "POST", "/v1/roles", { name: "X", baseRole: "viewer", permissions: [] })).statusCode,
+    ).toBe(403);
+
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: lead.json().id });
+    const members = (await call(owner.id, "GET", "/v1/members")).json().members;
+    expect(members.find((m: { userId: string }) => m.userId === builder.id)).toMatchObject({
+      role: "viewer",
+      customRole: "Support lead",
+    });
+    // Granted beyond the base role; denied where the role lacks the permission; base role elsewhere.
+    expect((await call(builder.id, "GET", "/v1/audit")).statusCode).toBe(200);
+    expect((await call(builder.id, "POST", "/v1/flows", { name: "Nope" })).statusCode).toBe(403);
+    expect((await call(builder.id, "GET", "/v1/flows")).statusCode).toBe(200);
+
+    // A builder who can't publish: built-in preset minus one permission.
+    const { presets } = (await call(owner.id, "GET", "/v1/roles")).json();
+    const noPublish = await call(owner.id, "POST", "/v1/roles", {
+      name: "Builder (no publish)",
+      baseRole: "builder",
+      permissions: presets.builder.filter((p: string) => p !== "flows.publish"),
+    });
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: noPublish.json().id });
+    const created = await call(builder.id, "POST", "/v1/flows", { name: "Draft only" });
+    expect(created.statusCode).toBe(201);
+    expect((await call(builder.id, "POST", `/v1/flows/${created.json().id}/publish`)).statusCode).toBe(403);
+
+    // Clearing the custom role keeps its base role as the built-in role.
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: null });
+    const [nodes, edges] = echoFlow("Hi");
+    await call(builder.id, "PUT", `/v1/flows/${created.json().id}/draft`, {
+      draft: { schemaVersion: 1, id: created.json().id, name: "Draft only", nodes, edges },
+    });
+    expect((await call(builder.id, "POST", `/v1/flows/${created.json().id}/publish`)).statusCode).toBe(201);
+    const roles = (await call(owner.id, "GET", "/v1/roles")).json().roles;
+    expect(roles.map((r: { name: string; members: number }) => [r.name, r.members])).toEqual([
+      ["Builder (no publish)", 0],
+      ["Support lead", 0],
+    ]);
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "builder" });
+  });
+
+  it("maps every protected write route to a permission", () => {
+    const routesDir = new URL("../src/routes/", import.meta.url);
+    const missing: string[] = [];
+    for (const file of readdirSync(routesDir)) {
+      const src = readFileSync(new URL(file, routesDir), "utf8");
+      const re =
+        /app\.(get|post|put|patch|delete)(?:<[^>]*>)?\(\s*"([^"]+)",\s*\{\s*preHandler:\s*auth\.requireWorkspace\("(\w+)"\)/g;
+      for (const m of src.matchAll(re)) {
+        const [, method, path, role] = m;
+        const key = `${method!.toUpperCase()} /v1${path}`;
+        if (method !== "get" && role !== "viewer" && !ROUTE_PERMISSIONS[key]) missing.push(key);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 
   it("records configuration changes in the audit log", async () => {

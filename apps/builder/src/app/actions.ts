@@ -111,7 +111,10 @@ export async function changeRole(form: FormData) {
       apiFetch(`/v1/members/${field(form, "userId")}`, {
         method: "PATCH",
         workspaceId: current.id,
-        body: { role: field(form, "role") },
+        // "custom:<id>" assigns a custom role; anything else is a built-in role.
+        body: field(form, "role").startsWith("custom:")
+          ? { customRoleId: field(form, "role").slice("custom:".length) }
+          : { role: field(form, "role") },
       }),
     "Role updated",
   );

@@ -190,3 +190,21 @@ export async function saveReports(form: FormData) {
 export async function sendTestReport() {
   await attempt("/settings", () => call("/v1/reports/send-test", "POST"), "Test report sent to your email");
 }
+
+export async function saveRole(form: FormData) {
+  const id = field(form, "id");
+  const body = {
+    name: field(form, "name"),
+    baseRole: field(form, "baseRole"),
+    permissions: form.getAll("permissions").map(String),
+  };
+  await attempt(
+    "/settings",
+    () => (id ? call(`/v1/roles/${id}`, "PUT", body) : call("/v1/roles", "POST", body)),
+    id ? "Role saved" : "Role created",
+  );
+}
+
+export async function deleteRole(form: FormData) {
+  await attempt("/settings", () => call(`/v1/roles/${field(form, "id")}`, "DELETE"), "Role deleted");
+}

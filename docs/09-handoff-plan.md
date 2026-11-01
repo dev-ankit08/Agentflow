@@ -195,10 +195,21 @@ Estimates are rough engineering days for this codebase.
     - Auth.js OIDC provider per org (Okta/Entra/Google), with SAML through a library such as `@boxyhq/saml-jackson`.
     - SCIM 2.0 `/scim/v2/Users|Groups` endpoints with a bearer token per org, mapping to `memberships`.
     - Settings UI: domain verification and "enforce SSO".
-12. **Custom roles (EN-2).**
-    - Today roles are fixed (owner > admin > builder > reviewer > viewer, `hasRole` in `apps/api/src/auth.ts`).
-    - Add a `roles` table with permission sets (e.g. `flows.publish`, `keys.manage`, `inbox.decide`).
-    - Replace `requireWorkspace(minRole)` with `requirePermission(perm)`, keeping the built-in roles as presets.
+12. **Custom roles (EN-2) — done** on branch `e2e-and-leftovers`.
+    - `apps/api/src/permissions.ts` defines 18 permissions, each with the lowest built-in role that has it (the
+      presets), and `ROUTE_PERMISSIONS` maps every protected write route to one. A test fails if a new protected
+      route is missing from the map.
+    - The `custom_roles` table (name, base role, permissions) and `memberships.custom_role_id` were added in
+      migration 0011.
+    - `requireWorkspace` is unchanged for members without a custom role. For members with one, the role's
+      permissions decide on mapped routes (granting or denying compared with the base role), and the base role
+      applies everywhere else.
+    - `/v1/roles` CRUD (audited). `PATCH /v1/members/:id` accepts `{ customRoleId }`, and the role's base role
+      becomes the member's built-in role.
+    - The Inbox honours an `inbox.decide` grant.
+    - UI: Settings → "Custom roles" (permission checkboxes), and custom roles in each member's role dropdown.
+    - **Still open:** the builder UI still hides buttons by built-in role, so a custom role that grants more than its
+      base role can do it through the API but may not see the button.
 13. **Real-time co-editing (CO-1, rest).**
     - Add Yjs: a `y-websocket`-style endpoint on the API (Fastify websocket) and the editor's nodes and edges in a Y.Doc.
     - Keep autosave of the draft JSON.

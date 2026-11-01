@@ -59,6 +59,24 @@ export const workspaces = pgTable(
   (t) => [index("workspaces_org_idx").on(t.orgId)],
 );
 
+/** Named permission sets (H6). Members with one are checked by its permissions on protected routes; `baseRole` covers the rest. */
+export const customRoles = pgTable(
+  "custom_roles",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => newId("crl")),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    baseRole: roleEnum("base_role").notNull(),
+    permissions: jsonb("permissions").$type<string[]>().default([]).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("custom_roles_ws_name_idx").on(t.workspaceId, t.name)],
+);
+
 export const memberships = pgTable(
   "memberships",
   {
@@ -69,6 +87,7 @@ export const memberships = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     role: roleEnum("role").notNull(),
+    customRoleId: text("custom_role_id").references(() => customRoles.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("memberships_user_ws_idx").on(t.userId, t.workspaceId)],

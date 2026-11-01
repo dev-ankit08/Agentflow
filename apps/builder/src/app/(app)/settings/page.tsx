@@ -6,6 +6,8 @@ import { addProviderKey, cancelInvite, changeRole, deleteProviderKey, inviteMemb
 import { saveWorkspaceSettings } from "../../actions-phase2";
 import {
   deleteEndUser,
+  deleteRole,
+  saveRole,
   indexKnowledgeNow,
   saveEmbedding,
   saveCache,
@@ -45,7 +47,20 @@ type EndUser = {
   conversations: number;
 };
 
-type Member = { userId: string; email: string | null; name: string | null; role: string };
+type Member = {
+  userId: string;
+  email: string | null;
+  name: string | null;
+  role: string;
+  customRoleId: string | null;
+  customRole: string | null;
+};
+type CustomRole = { id: string; name: string; baseRole: string; permissions: string[]; members: number };
+type Roles = {
+  roles: CustomRole[];
+  permissions: { id: string; label: string; preset: string }[];
+  presets: Record<string, string[]>;
+};
 type Invite = { id: string; email: string; role: string };
 type ProviderKey = { id: string; provider: string; label: string; maskedSecret: string; baseUrl: string | null };
 
@@ -59,6 +74,49 @@ const providerLabels: Record<string, string> = {
   vertex: "Google Vertex",
 };
 
+/** Name, base role and permission checkboxes; a new role starts from the reviewer preset. */
+function RoleForm({ role, roles }: { role?: CustomRole; roles: Roles }) {
+  const chosen = new Set(role?.permissions ?? roles.presets.reviewer ?? []);
+  const key = role?.id ?? "new";
+  return (
+    <form action={saveRole} className="mt-3 space-y-3">
+      {role && <input type="hidden" name="id" value={role.id} />}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Name" htmlFor={`${key}-role-name`}>
+          <Input id={`${key}-role-name`} name="name" required maxLength={60} defaultValue={role?.name} />
+        </Field>
+        <Field
+          label="Base role"
+          htmlFor={`${key}-role-base`}
+          hint="Applies to everything the permissions below don't cover (mostly viewing)."
+        >
+          <Select id={`${key}-role-base`} name="baseRole" defaultValue={role?.baseRole ?? "reviewer"}>
+            {["viewer", "reviewer", "builder", "admin"].map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <fieldset className="grid gap-1.5 sm:grid-cols-2">
+        <legend className="mb-1 text-xs font-medium text-muted">Permissions</legend>
+        {roles.permissions.map((p) => (
+          <label key={p.id} className="flex items-start gap-2 text-sm text-text">
+            <input type="checkbox" name="permissions" value={p.id} defaultChecked={chosen.has(p.id)} className="mt-1" />
+            <span>
+              {p.label} <span className="text-xs text-muted">({p.preset}+)</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <Button type="submit" size="sm">
+        {role ? "Save role" : "Create role"}
+      </Button>
+    </form>
+  );
+}
+
 export default async function SettingsPage({
   searchParams,
 }: {
@@ -66,10 +124,11 @@ export default async function SettingsPage({
 }) {
   const { current, user } = await requireWorkspace();
   const isAdmin = can(current, "admin");
-  const [{ members, invites }, keys, wsSettings] = await Promise.all([
+  const [{ members, invites }, keys, wsSettings, roles] = await Promise.all([
     apiFetch<{ members: Member[]; invites: Invite[] }>("/v1/members", { workspaceId: current.id }),
     isAdmin ? apiFetch<{ keys: ProviderKey[] }>("/v1/provider-keys", { workspaceId: current.id }) : null,
     apiFetch<WsSettings>("/v1/workspace/settings", { workspaceId: current.id }),
+    apiFetch<Roles>("/v1/roles", { workspaceId: current.id }),
   ]);
   const { error, ok, endUser: endUserQuery } = await searchParams;
   const endUser =
@@ -108,12 +167,26 @@ export default async function SettingsPage({
                       <label htmlFor={`role-${m.userId}`} className="sr-only">
                         Role
                       </label>
-                      <Select id={`role-${m.userId}`} name="role" defaultValue={m.role} className="h-8 w-32">
+                      <Select
+                        id={`role-${m.userId}`}
+                        name="role"
+                        defaultValue={m.customRoleId ? `custom:${m.customRoleId}` : m.role}
+                        className="h-8 w-44"
+                      >
                         {roleOptions.map((r) => (
                           <option key={r} value={r}>
                             {r}
                           </option>
                         ))}
+                        {roles.roles.length > 0 && (
+                          <optgroup label="Custom roles">
+                            {roles.roles.map((r) => (
+                              <option key={r.id} value={`custom:${r.id}`}>
+                                {r.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
                       </Select>
                       <Button type="submit" variant="secondary" size="sm">
                         Save
@@ -300,6 +373,39 @@ export default async function SettingsPage({
             </form>
           </CardBody>
         </Card>
+
+        {isAdmin && (
+          <Card id="roles">
+            <CardHeader
+              title="Custom roles"
+              description="Fine-grained permission sets, e.g. a reviewer who can also read the audit log, or a builder who can't publish. Assign them in Members."
+            />
+            <CardBody className="space-y-4">
+              {roles.roles.map((r) => (
+                <details key={r.id} className="rounded-lg border border-border p-3">
+                  <summary className="cursor-pointer text-sm text-text">
+                    <b>{r.name}</b>{" "}
+                    <span className="text-muted">
+                      · based on {r.baseRole} · {r.permissions.length} permissions · {r.members} member
+                      {r.members === 1 ? "" : "s"}
+                    </span>
+                  </summary>
+                  <RoleForm role={r} roles={roles} />
+                  <form action={deleteRole} className="mt-2">
+                    <input type="hidden" name="id" value={r.id} />
+                    <Button type="submit" variant="ghost" size="sm">
+                      Delete role
+                    </Button>
+                  </form>
+                </details>
+              ))}
+              <details className="rounded-lg border border-dashed border-border p-3" open={roles.roles.length === 0}>
+                <summary className="cursor-pointer text-sm font-medium text-accent">New custom role</summary>
+                <RoleForm roles={roles} />
+              </details>
+            </CardBody>
+          </Card>
+        )}
 
         <Card id="reports">
           <CardHeader

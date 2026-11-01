@@ -67,7 +67,9 @@ export async function inboxRoutes(app: FastifyInstance, { db, auth, executor, ch
         .from(approvals)
         .where(and(eq(approvals.id, req.params.id), eq(approvals.workspaceId, ws.id)));
       if (!approval) throw new HttpError(404, "Approval not found");
-      if (!hasRole(ws.role, approval.approverRole as Role))
+      // A custom role with "inbox.decide" may decide any approval; otherwise the approver role applies.
+      const granted = Boolean(ws.customRoleId) && ws.permissions.includes("inbox.decide");
+      if (!granted && !hasRole(ws.role, approval.approverRole as Role))
         throw new HttpError(403, `Requires ${approval.approverRole} role or higher`);
       return decideApproval(
         { db, executor, channels },

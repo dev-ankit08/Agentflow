@@ -1,7 +1,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { invites, memberships, roles, users, type Db } from "@agentflow/db";
+import { customRoles, invites, memberships, roles, users, type Db, type Role } from "@agentflow/db";
 import { HttpError, currentUser, currentWorkspace, hasRole } from "../auth";
 import type { Deps } from "../app";
 
@@ -9,7 +9,11 @@ const Invite = z.object({
   email: z.string().trim().toLowerCase().pipe(z.email()),
   role: z.enum(roles),
 });
-const ChangeRole = z.object({ role: z.enum(roles) });
+/** Either a built-in role (clears any custom role) or a custom role (its base role becomes the built-in role). */
+const ChangeRole = z.union([
+  z.object({ role: z.enum(roles) }),
+  z.object({ customRoleId: z.string().min(1).nullable() }),
+]);
 
 async function ownerCount(db: Db, workspaceId: string) {
   const owners = await db
@@ -23,9 +27,17 @@ export async function memberRoutes(app: FastifyInstance, { db, auth }: Deps) {
   app.get("/members", { preHandler: auth.requireWorkspace("viewer") }, async (req) => {
     const ws = currentWorkspace(req);
     const members = await db
-      .select({ userId: users.id, email: users.email, name: users.name, role: memberships.role })
+      .select({
+        userId: users.id,
+        email: users.email,
+        name: users.name,
+        role: memberships.role,
+        customRoleId: memberships.customRoleId,
+        customRole: customRoles.name,
+      })
       .from(memberships)
       .innerJoin(users, eq(users.id, memberships.userId))
+      .leftJoin(customRoles, eq(customRoles.id, memberships.customRoleId))
       .where(eq(memberships.workspaceId, ws.id))
       .orderBy(users.email);
     const pending = await db
@@ -70,8 +82,27 @@ export async function memberRoutes(app: FastifyInstance, { db, auth }: Deps) {
     "/members/:userId",
     { preHandler: auth.requireWorkspace("admin") },
     async (req) => {
-      const { role } = ChangeRole.parse(req.body);
+      const body = ChangeRole.parse(req.body);
       const ws = currentWorkspace(req);
+      let role: Role;
+      let customRoleId: string | null = null;
+      if ("role" in body) role = body.role;
+      else if (body.customRoleId === null) {
+        const [current] = await db
+          .select({ role: memberships.role })
+          .from(memberships)
+          .where(and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, req.params.userId)));
+        if (!current) throw new HttpError(404, "Member not found");
+        role = current.role;
+      } else {
+        const [custom] = await db
+          .select()
+          .from(customRoles)
+          .where(and(eq(customRoles.id, body.customRoleId), eq(customRoles.workspaceId, ws.id)));
+        if (!custom) throw new HttpError(404, "Role not found");
+        role = custom.baseRole;
+        customRoleId = custom.id;
+      }
       const [target] = await db
         .select({ role: memberships.role })
         .from(memberships)
@@ -85,9 +116,9 @@ export async function memberRoutes(app: FastifyInstance, { db, auth }: Deps) {
       }
       await db
         .update(memberships)
-        .set({ role })
+        .set({ role, customRoleId })
         .where(and(eq(memberships.workspaceId, ws.id), eq(memberships.userId, req.params.userId)));
-      return { userId: req.params.userId, role };
+      return { userId: req.params.userId, role, customRoleId };
     },
   );
 
