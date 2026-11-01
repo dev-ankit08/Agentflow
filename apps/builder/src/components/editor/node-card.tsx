@@ -1,13 +1,16 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { parseContextRules } from "@agentflow/expression-engine";
 import { cn } from "@agentflow/ui";
 import { nodeMeta, outputHandles, type FlowNode } from "./model";
 
 function subtitle(node: FlowNode["data"]["node"]): string {
   switch (node.type) {
-    case "agent":
-      return node.config.model.name || "choose a model";
+    case "agent": {
+      const rules = node.config.contextRules ? parseContextRules(node.config.contextRules).rules.length : 0;
+      return `${node.config.model.name || "choose a model"}${rules ? ` · ${rules} context rule${rules === 1 ? "" : "s"}` : ""}`;
+    }
     case "decision":
       return `${node.config.outcomes.length + 1} outcomes`;
     case "assignment":

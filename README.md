@@ -47,6 +47,17 @@ and tested against local fakes, but **not yet against the real services** — se
     overwriting someone else's save.
 23. **WordPress**: a plugin in `integrations/wordpress/agentflow` adds the widget (bubble or `[agentflow]` shortcode) and
     signs in logged-in WordPress users.
+24. **Deterministic context rules**: every AI step (Agent, Supervisor and its specialists, Parallel tasks) can have
+    YAML rules (`when`/`else`, `switch`/`cases`, `first`, `title`). They are evaluated from variables without
+    AI, so only the matching context reaches the model. The editor checks rules as you type and previews the exact
+    context for sample values, and each run records which rules matched.
+25. **Debug every step**: in the test console (select a step, or click a node after a run) and on Runs & Traces, see
+    the values a step could read, what it changed, the exact system prompt, context-rule block and user message it
+    sent, which rules matched, and its output, tokens and cost. Stored with personal data redacted, never sent to
+    widget visitors, and skipped in zero-retention mode.
+26. **Room to work**: collapse the node palette, the properties panel, the test console and the app sidebar (or press
+    `\` for focus mode); resize the console; search nodes. Help text sits in ⓘ tooltips; press `?` for keyboard
+    shortcuts.
 
 ## Packages
 
@@ -123,6 +134,12 @@ Then **Publish**, open **Deploy → Live preview**, and chat with the embedded w
 
 To use a real model, add a key in **Settings** (Anthropic, OpenAI, Azure OpenAI or OpenAI-compatible) and pick it on
 each AI Agent node.
+
+### Free trial on GitHub Codespaces
+
+Open the repository on GitHub, then **Code → Codespaces → Create codespace**: it installs, builds and starts
+everything, and prints a link and a trial access code to share with testers. Nothing runs on your computer. See
+[docs/10-codespaces-trial.md](docs/10-codespaces-trial.md).
 
 ### With Docker instead
 

@@ -51,7 +51,7 @@ export default async function HomePage() {
     <>
       <PageHeader
         title={`Welcome to ${current.orgName}`}
-        description={`Workspace: ${current.name} · Role: ${current.role}`}
+        subtitle={`Workspace: ${current.name} · Role: ${current.role}`}
       />
       <Card>
         <CardHeader title="Get started" description="Go from zero to an AI agent on your website." />

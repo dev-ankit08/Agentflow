@@ -5,7 +5,9 @@ import type { ChatMessage, LLMGateway } from "@agentflow/llm-gateway";
 /** What each node type is for and its config fields, kept short so the whole catalogue fits in one prompt. */
 const CATALOG = `Node types (type: config fields):
 - start: {} — exactly one; where a chat message or request enters. The message is {{trigger.message}}.
-- agent: { model, systemPrompt, userPrompt, outputSchema?, tools? } — an LLM step. Reply text is {{<id>.text}}; with outputSchema (JSON Schema object) fields are {{<id>.output.<field>}}.
+- agent: { model, systemPrompt, userPrompt, outputSchema?, tools?, contextRules? } — an LLM step. Reply text is {{<id>.text}}; with outputSchema (JSON Schema object) fields are {{<id>.output.<field>}}. contextRules is a YAML string of rules that pick context from variables without AI, e.g. a rule with when: order.total > 500 and include: High-value order., or a rule with switch: order.status and cases per status.
+  include: VIP customer." or "- switch: order.status
+  cases: { shipped: ..., processing: ... }".
 - decision: { outcomes: [{ id, label?, condition }], defaultOutcome } — branches; each outcome id and defaultOutcome is a sourceHandle.
 - assignment: { assignments: [{ variable, value }] } — set variables; value is a formula.
 - knowledge: { sources: [], query, topK } — search documents; passages are {{<id>.context}}.

@@ -43,7 +43,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               <Card key={a.id}>
                 <CardHeader
                   title={a.message}
-                  description={`${a.flowName} · ${new Date(a.createdAt).toLocaleString()} · expires ${new Date(a.expiresAt).toLocaleString()}`}
+                  subtitle={`${a.flowName} · ${new Date(a.createdAt).toLocaleString()} · expires ${new Date(a.expiresAt).toLocaleString()}`}
                   action={<Badge tone="warning">{a.approverRole}+</Badge>}
                 />
                 <div className="space-y-2 px-5 py-3">

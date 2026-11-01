@@ -6,6 +6,9 @@ import type {
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
+import { InfoTip } from "./tooltip";
+
+export { InfoTip, Tooltip } from "./tooltip";
 
 export function cn(...classes: (string | false | null | undefined)[]) {
   return classes.filter(Boolean).join(" ");
@@ -58,18 +61,26 @@ export function Field({
   label,
   htmlFor,
   hint,
+  hintInline,
   children,
 }: {
   label: string;
   htmlFor: string;
+  /** Help text, shown in a tooltip next to the label (or under the field with hintInline). */
   hint?: string;
+  hintInline?: boolean;
   children: ReactNode;
 }) {
   return (
     <div>
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <Label htmlFor={htmlFor} className="mb-0">
+          {label}
+        </Label>
+        {hint && !hintInline && <InfoTip label={`About ${label}`}>{hint}</InfoTip>}
+      </div>
       {children}
-      {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
+      {hint && hintInline && <p className="mt-1 text-xs text-muted">{hint}</p>}
     </div>
   );
 }
@@ -81,17 +92,24 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
 export function CardHeader({
   title,
   description,
+  subtitle,
   action,
 }: {
   title: ReactNode;
+  /** What this card is for, shown in a tooltip next to the title. */
   description?: ReactNode;
+  /** Facts about this item (dates, counts, status), always visible under the title. */
+  subtitle?: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-      <div>
-        <h2 className="text-base font-semibold text-text">{title}</h2>
-        {description && <p className="mt-0.5 text-sm text-muted">{description}</p>}
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <h2 className="text-base font-semibold text-text">{title}</h2>
+          {description && <InfoTip>{description}</InfoTip>}
+        </div>
+        {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
       </div>
       {action}
     </div>
@@ -141,17 +159,24 @@ export function Alert({ tone = "danger", children }: { tone?: "danger" | "succes
 export function PageHeader({
   title,
   description,
+  subtitle,
   action,
 }: {
   title: string;
+  /** What this page is for, shown in a tooltip next to the title. */
   description?: ReactNode;
+  /** Facts about what is shown (dates, counts, workspace), always visible under the title. */
+  subtitle?: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-text">{title}</h1>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight text-text">{title}</h1>
+          {description && <InfoTip label={`About ${title}`}>{description}</InfoTip>}
+        </div>
+        {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
       </div>
       {action}
     </div>

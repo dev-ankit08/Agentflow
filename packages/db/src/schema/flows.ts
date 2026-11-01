@@ -114,6 +114,8 @@ export const runSteps = pgTable(
     inputJson: jsonb("input_json"),
     outputJson: jsonb("output_json"),
     promptRedacted: text("prompt_redacted"),
+    /** Debugger data: variables before the step, what it changed, the prompts it sent (PII-redacted). */
+    debugJson: jsonb("debug_json"),
     model: text("model"),
     tokensIn: integer("tokens_in"),
     tokensOut: integer("tokens_out"),

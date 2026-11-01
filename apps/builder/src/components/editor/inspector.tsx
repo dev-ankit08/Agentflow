@@ -2,12 +2,13 @@
 
 import type { FlowInput, NodeDef } from "@agentflow/flow-schema";
 import { outcomeTags } from "@agentflow/flow-schema";
-import { Badge, Button, Input, Select } from "@agentflow/ui";
-import { FormulaField, ModelPicker, Row, SchemaBuilder, TemplateField } from "./fields";
+import { Badge, Button, InfoTip, Input, Select } from "@agentflow/ui";
+import { FormulaField, ModelPicker, Row, SchemaBuilder, TemplateField, HowItWorks, Section } from "./fields";
 import { ExtraFields, type FlowSummary, type SourceSummary } from "./inspector-extra";
 import { NodeComments, OrchestrationFields, TriggersPanel, type FlowComment } from "./inspector-orchestration";
 import { nodeMeta, type ConnectorSummary } from "./model";
 import { PromptLibrary } from "./prompt-library";
+import { ContextRulesField } from "./context-rules-field";
 
 type Props = {
   node: NodeDef;
@@ -54,16 +55,18 @@ export function Inspector({
   canComment,
 }: Props) {
   const meta = nodeMeta[node.type];
+  const outputFields =
+    node.type === "agent" ? Object.keys((node.config.outputSchema?.properties as object | undefined) ?? {}).length : 0;
   const set = <N extends NodeDef>(patch: (n: N) => N) => onChange(patch(structuredClone(node) as N));
 
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="flex items-center gap-1.5">
           <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: meta.color }}>
             {meta.label}
           </p>
-          <p className="text-xs text-muted">{meta.hint}</p>
+          <InfoTip label={`About ${meta.label}`}>{meta.hint}</InfoTip>
         </div>
         {node.type !== "start" && !readOnly && (
           <Button variant="danger" size="sm" onClick={onDelete} aria-label="Delete node">
@@ -122,6 +125,12 @@ export function Inspector({
               onUse={(systemPrompt) => set<typeof node>((n) => ({ ...n, config: { ...n.config, systemPrompt } }))}
             />
           </Row>
+          <ContextRulesField
+            value={node.config.contextRules ?? ""}
+            suggestions={suggestions}
+            disabled={readOnly}
+            onChange={(contextRules) => set<typeof node>((n) => ({ ...n, config: { ...n.config, contextRules } }))}
+          />
           <Row label="User message">
             <TemplateField
               value={node.config.userPrompt}
@@ -131,17 +140,24 @@ export function Inspector({
               onChange={(userPrompt) => set<typeof node>((n) => ({ ...n, config: { ...n.config, userPrompt } }))}
             />
           </Row>
-          <Row
-            label="Structured output"
+          <Section
+            title="Structured output"
             hint={`Fields become variables like {{${node.id}.output.field}}. Leave empty for a free-text reply ({{${node.id}.text}}).`}
+            status={outputFields ? `${outputFields} field${outputFields === 1 ? "" : "s"}` : "free text"}
+            defaultOpen={outputFields > 0}
           >
             <SchemaBuilder
               value={node.config.outputSchema}
               disabled={readOnly}
               onChange={(outputSchema) => set<typeof node>((n) => ({ ...n, config: { ...n.config, outputSchema } }))}
             />
-          </Row>
-          <Row label="Tools the agent may call" hint="The model can only call tools ticked here.">
+          </Section>
+          <Section
+            title="Tools the agent may call"
+            hint="The model can only call tools ticked here."
+            status={node.config.tools?.length ? `${node.config.tools.length} selected` : "none"}
+            defaultOpen={Boolean(node.config.tools?.length)}
+          >
             {connectors.length === 0 ? (
               <p className="text-[11px] text-muted">Connect an MCP server on the Connectors page first.</p>
             ) : (
@@ -182,7 +198,7 @@ export function Inspector({
                 ))}
               </div>
             )}
-          </Row>
+          </Section>
           <details className="rounded-lg border border-border p-2">
             <summary className="cursor-pointer text-xs font-medium text-text">Advanced</summary>
             <div className="mt-3 space-y-3">
@@ -271,7 +287,7 @@ export function Inspector({
 
       {node.type === "decision" && (
         <>
-          <p className="text-[11px] text-muted">Outcomes are checked top to bottom; the first true condition wins.</p>
+          <HowItWorks>Outcomes are checked top to bottom; the first true condition wins.</HowItWorks>
           {node.config.outcomes.map((o, i) => (
             <div key={i} className="space-y-1.5 rounded-lg border border-border p-2">
               <div className="flex gap-1">
@@ -563,7 +579,7 @@ export function Inspector({
 
 function IdField({ node, onRename, disabled }: { node: NodeDef; onRename: Props["onRename"]; disabled: boolean }) {
   return (
-    <Row label="Id (used in variables)" hint={<span className="font-mono">{`{{${node.id}.…}}`}</span>}>
+    <Row label="Id (used in variables)" note={<span className="font-mono">{`{{${node.id}.…}}`}</span>}>
       <Input
         key={node.id}
         defaultValue={node.id}

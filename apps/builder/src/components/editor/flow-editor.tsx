@@ -19,7 +19,8 @@ import {
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateFlow, variableTypes, type FlowInput, type NodeDef, type NodeType } from "@agentflow/flow-schema";
-import { Badge, Button, Input, Select, cn } from "@agentflow/ui";
+import { Badge, Button, InfoTip, Input, Select, Tooltip, cn } from "@agentflow/ui";
+import { useStoredState } from "@/lib/use-stored-state";
 import { Row } from "./fields";
 import { useCollab } from "./collab";
 import { Inspector } from "./inspector";
@@ -31,7 +32,6 @@ import {
   fromCanvas,
   newNode,
   nodeMeta,
-  paletteGroups,
   toCanvas,
   uniqueId,
   variableSuggestions,
@@ -39,6 +39,7 @@ import {
   type FlowNode,
 } from "./model";
 import { NodeCard } from "./node-card";
+import { Palette, PanelToggle } from "./palette";
 import { TestConsole } from "./test-console";
 
 type Props = {
@@ -54,6 +55,26 @@ type Props = {
   /** When the draft was last saved; used to detect someone else's newer save. */
   initialUpdatedAt: string;
 };
+
+const PANEL_DEFAULTS = {
+  palette: true,
+  inspector: true,
+  consoleMin: false,
+  consoleHeight: 320,
+  chat: true,
+  timeline: true,
+};
+
+const SHORTCUTS: [string, string][] = [
+  ["[", "Show or hide the node palette"],
+  ["]", "Show or hide the properties panel"],
+  ["\\", "Focus mode: hide or show all panels"],
+  ["T", "Open or close the test console"],
+  ["Ctrl+Z / Ctrl+Y", "Undo / redo"],
+  ["Ctrl+C / Ctrl+V", "Copy / paste selected nodes"],
+  ["Delete", "Remove the selected node or connection"],
+  ["?", "Show this list"],
+];
 
 type Snapshot = { nodes: FlowNode[]; edges: Edge[]; base: FlowInput };
 const nodeTypes = { af: NodeCard };
@@ -86,6 +107,18 @@ function Editor({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved" | "error">("saved");
   const [showTest, setShowTest] = useState(false);
+  const [panels, setPanels] = useStoredState("af-editor-panels", PANEL_DEFAULTS);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const focused = !panels.palette && !panels.inspector;
+  const toggleFocus = useCallback(
+    () =>
+      setPanels((p) =>
+        !p.palette && !p.inspector
+          ? { palette: true, inspector: true, consoleMin: false }
+          : { palette: false, inspector: false, consoleMin: true },
+      ),
+    [setPanels],
+  );
   const [showIssues, setShowIssues] = useState(false);
   const [notice, setNotice] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
   const [liveVersion, setLiveVersion] = useState(initialLive);
@@ -434,8 +467,8 @@ function Editor({
   // --- Keyboard: undo/redo, copy/paste -------------------------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement;
-      if (el.closest("input, textarea, select, [contenteditable]")) return;
+      const el = e.target instanceof Element ? e.target : null;
+      if (el?.closest("input, textarea, select, [contenteditable]")) return;
       const mod = e.ctrlKey || e.metaKey;
       if (!mod || !canEdit) return;
       const key = e.key.toLowerCase();
@@ -470,6 +503,24 @@ function Editor({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [canEdit, nodes, redo, remember, undo]);
+
+  // --- Keyboard: panels -------------------------------------------------------------
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target instanceof Element ? e.target : null;
+      if (el?.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "[") setPanels((p) => ({ palette: !p.palette }));
+      else if (e.key === "]") setPanels((p) => ({ inspector: !p.inspector }));
+      else if (e.key === "\\") toggleFocus();
+      else if (e.key === "t" || e.key === "T") setShowTest((v) => !v);
+      else if (e.key === "?") setShowShortcuts((v) => !v);
+      else if (e.key === "Escape") setShowShortcuts(false);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setPanels, toggleFocus]);
 
   // --- Publish ------------------------------------------------------------------------
   async function publish() {
@@ -585,36 +636,88 @@ function Editor({
               ))}
             </div>
           )}
-          <Button variant="ghost" size="sm" onClick={undo} disabled={!canEdit} title="Undo (Ctrl+Z)">
-            ↶
-          </Button>
-          <Button variant="ghost" size="sm" onClick={redo} disabled={!canEdit} title="Redo (Ctrl+Y)">
-            ↷
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!canEdit}
-            onClick={() => {
-              remember();
-              setNodes((ns) => autoLayout(ns, edges));
-              touch();
-              setTimeout(() => fitView({ padding: 0.2 }), 50);
-            }}
-          >
-            Auto-layout
-          </Button>
-          <Button variant={showTest ? "primary" : "secondary"} size="sm" onClick={() => setShowTest((s) => !s)}>
-            ▶ Test
-          </Button>
+          <div className="flex items-center rounded-lg border border-border">
+            <Tooltip content="Undo (Ctrl+Z)">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={undo}
+                disabled={!canEdit}
+                aria-label="Undo"
+                className="!px-2.5"
+              >
+                ↶
+              </Button>
+            </Tooltip>
+            <Tooltip content="Redo (Ctrl+Y)">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={redo}
+                disabled={!canEdit}
+                aria-label="Redo"
+                className="!px-2.5"
+              >
+                ↷
+              </Button>
+            </Tooltip>
+            <Tooltip content="Tidy the canvas: arrange nodes left to right">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canEdit}
+                aria-label="Auto-layout"
+                className="!px-2.5"
+                onClick={() => {
+                  remember();
+                  setNodes((ns) => autoLayout(ns, edges));
+                  touch();
+                  setTimeout(() => fitView({ padding: 0.2 }), 50);
+                }}
+              >
+                ⇄
+              </Button>
+            </Tooltip>
+            <Tooltip content={focused ? "Show panels  (\\)" : "Focus mode: hide panels for more canvas  (\\)"}>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={focused ? "Show panels" : "Focus mode"}
+                aria-pressed={focused}
+                onClick={toggleFocus}
+                className={cn("!px-2.5", focused && "text-accent")}
+              >
+                ⤢
+              </Button>
+            </Tooltip>
+            <Tooltip content="Keyboard shortcuts  (?)">
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Keyboard shortcuts"
+                onClick={() => setShowShortcuts(true)}
+                className="!px-2.5"
+              >
+                ?
+              </Button>
+            </Tooltip>
+          </div>
+          <Tooltip content="Chat with the current draft and debug each step  (T)">
+            <Button variant={showTest ? "primary" : "secondary"} size="sm" onClick={() => setShowTest((s) => !s)}>
+              ▶ Test
+            </Button>
+          </Tooltip>
+          <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
           <Link
             href={`/flows/${flowId}/evals`}
+            title="Run test datasets against the draft"
             className="inline-flex h-8 items-center rounded-lg border border-border px-3 text-sm text-text hover:bg-surface-2"
           >
             Evals
           </Link>
           <Link
             href={`/flows/${flowId}/deploy`}
+            title="Embed on a website, channels, versions and A/B tests"
             className="inline-flex h-8 items-center rounded-lg border border-border px-3 text-sm text-text hover:bg-surface-2"
           >
             Deploy
@@ -659,49 +762,15 @@ function Editor({
       )}
 
       <div className="flex min-h-0 flex-1">
-        {/* Palette */}
-        <aside
-          aria-label="Node palette"
-          className="w-52 shrink-0 overflow-y-auto border-r border-border bg-surface p-3"
-        >
-          {paletteGroups.map((g) => (
-            <div key={g.title} className="mb-4">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">{g.title}</p>
-              {g.types.map((type) => {
-                const meta = nodeMeta[type];
-                return (
-                  <button
-                    key={type}
-                    type="button"
-                    draggable={canEdit}
-                    disabled={!canEdit}
-                    title={`${meta.hint} — drag onto the canvas or click to add`}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData(DRAG_TYPE, type);
-                      e.dataTransfer.effectAllowed = "move";
-                    }}
-                    onClick={() =>
-                      addNode(type, screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 - 100 }))
-                    }
-                    className="mb-1 flex w-full cursor-grab items-center gap-2 rounded-lg border border-border bg-surface px-2 py-2 text-left text-xs text-text hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <span
-                      className="flex h-6 w-6 items-center justify-center rounded-md text-white"
-                      style={{ background: meta.color }}
-                      aria-hidden
-                    >
-                      {meta.icon}
-                    </span>
-                    {meta.label}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-          <p className="text-[10px] leading-relaxed text-muted">
-            Drag nodes onto the canvas, then connect the dots. Ctrl+C / Ctrl+V copies nodes; Delete removes them.
-          </p>
-        </aside>
+        <Palette
+          collapsed={!panels.palette}
+          onToggle={() => setPanels((p) => ({ palette: !p.palette }))}
+          canEdit={canEdit}
+          dragType={DRAG_TYPE}
+          onAdd={(type) =>
+            addNode(type, screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 - 100 }))
+          }
+        />
 
         {/* Canvas */}
         <div
@@ -748,47 +817,82 @@ function Editor({
         </div>
 
         {/* Properties */}
-        <aside aria-label="Properties" className="w-[360px] shrink-0 overflow-y-auto border-l border-border bg-surface">
-          {selected ? (
-            <Inspector
-              key={selected.id}
-              node={selected}
-              onChange={updateNode}
-              onRename={renameNode}
-              onDelete={deleteSelected}
-              suggestions={suggestions}
-              connectors={connectors}
-              configuredProviders={configuredProviders}
-              issues={issuesByNode.get(selected.id) ?? []}
-              readOnly={!canEdit}
-              sources={sources}
-              flows={flows}
-              currentFlowId={flowId}
-              triggers={base.triggers}
-              onTriggersChange={(triggers) => {
-                remember(true);
-                setBase((b) => ({ ...b, triggers }));
-                touch();
-              }}
-              comments={comments}
-              onAddComment={addComment}
-              onResolveComment={resolveComment}
-              canComment={canComment}
+        {!panels.inspector ? (
+          <aside
+            aria-label="Properties"
+            className="flex w-10 shrink-0 flex-col items-center gap-3 border-l border-border bg-surface py-2"
+          >
+            <PanelToggle
+              side="right"
+              collapsed
+              label="Show properties  ]"
+              onClick={() => setPanels({ inspector: true })}
             />
-          ) : (
-            <FlowSettings
-              base={base}
-              readOnly={!canEdit}
-              warnings={validation.warnings.map((w) => w.message)}
-              globalErrors={validation.errors.filter((e) => !e.nodeId).map((e) => e.message)}
-              onChange={(next) => {
-                remember(true);
-                setBase(next);
-                touch();
-              }}
-            />
-          )}
-        </aside>
+            <button
+              type="button"
+              onClick={() => setPanels({ inspector: true })}
+              className="rotate-180 text-[11px] font-medium text-muted [writing-mode:vertical-rl] hover:text-text"
+            >
+              {selected ? `Properties · ${selected.id}` : "Flow settings"}
+            </button>
+            {selected && issuesByNode.get(selected.id)?.length ? (
+              <span className="h-2 w-2 rounded-full bg-danger" aria-label="This node has issues" />
+            ) : null}
+          </aside>
+        ) : (
+          <aside aria-label="Properties" className="flex w-[360px] shrink-0 flex-col border-l border-border bg-surface">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+              <PanelToggle
+                side="right"
+                collapsed={false}
+                label="Hide properties  ]"
+                onClick={() => setPanels({ inspector: false })}
+              />
+              <p className="text-xs font-semibold text-text">{selected ? "Properties" : "Flow"}</p>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {selected ? (
+                <Inspector
+                  key={selected.id}
+                  node={selected}
+                  onChange={updateNode}
+                  onRename={renameNode}
+                  onDelete={deleteSelected}
+                  suggestions={suggestions}
+                  connectors={connectors}
+                  configuredProviders={configuredProviders}
+                  issues={issuesByNode.get(selected.id) ?? []}
+                  readOnly={!canEdit}
+                  sources={sources}
+                  flows={flows}
+                  currentFlowId={flowId}
+                  triggers={base.triggers}
+                  onTriggersChange={(triggers) => {
+                    remember(true);
+                    setBase((b) => ({ ...b, triggers }));
+                    touch();
+                  }}
+                  comments={comments}
+                  onAddComment={addComment}
+                  onResolveComment={resolveComment}
+                  canComment={canComment}
+                />
+              ) : (
+                <FlowSettings
+                  base={base}
+                  readOnly={!canEdit}
+                  warnings={validation.warnings.map((w) => w.message)}
+                  globalErrors={validation.errors.filter((e) => !e.nodeId).map((e) => e.message)}
+                  onChange={(next) => {
+                    remember(true);
+                    setBase(next);
+                    touch();
+                  }}
+                />
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {showTest && (
@@ -800,7 +904,62 @@ function Editor({
             setShowTest(false);
             setRunStatus({});
           }}
+          layout={{
+            minimized: panels.consoleMin,
+            height: panels.consoleHeight,
+            chat: panels.chat,
+            timeline: panels.timeline,
+          }}
+          onLayout={(patch) =>
+            setPanels({
+              ...(patch.minimized !== undefined && { consoleMin: patch.minimized }),
+              ...(patch.height !== undefined && { consoleHeight: patch.height }),
+              ...(patch.chat !== undefined && { chat: patch.chat }),
+              ...(patch.timeline !== undefined && { timeline: patch.timeline }),
+            })
+          }
+          issues={validation.errors}
+          onSelectNode={(id) => {
+            setSelectedId(id);
+            setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })));
+            setPanels({ inspector: true });
+          }}
+          focusNodeId={selectedId}
         />
+      )}
+
+      {showShortcuts && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Keyboard shortcuts"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+          onClick={() => setShowShortcuts(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-border bg-surface p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-semibold text-text">Keyboard shortcuts</p>
+              <button type="button" aria-label="Close" onClick={() => setShowShortcuts(false)} className="text-muted">
+                ×
+              </button>
+            </div>
+            <dl className="space-y-1.5 text-xs">
+              {SHORTCUTS.map(([k, v]) => (
+                <div key={k} className="flex items-center justify-between gap-4">
+                  <dd className="text-muted">{v}</dd>
+                  <dt>
+                    <kbd className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-text">
+                      {k}
+                    </kbd>
+                  </dt>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -825,9 +984,9 @@ function FlowSettings({
   const setVars = (next: typeof variables) => onChange({ ...base, variables: next });
   return (
     <div className="space-y-5 p-4">
-      <div>
+      <div className="flex items-center gap-1.5">
         <p className="text-sm font-semibold text-text">Flow settings</p>
-        <p className="text-xs text-muted">Select a node to edit it. These settings apply to the whole flow.</p>
+        <InfoTip label="About flow settings">Select a node to edit it. These settings apply to the whole flow.</InfoTip>
       </div>
       {[
         ...globalErrors.map((m) => ({ m, tone: "text-danger" })),
@@ -838,10 +997,12 @@ function FlowSettings({
         </p>
       ))}
       <div className="space-y-2">
-        <p className="text-xs font-semibold text-text">Variables</p>
-        <p className="text-[11px] text-muted">
-          Values kept across the conversation. Set them with Assignment nodes; read them as {"{{name}}"}.
-        </p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs font-semibold text-text">Variables</p>
+          <InfoTip label="About variables">
+            Values kept across the conversation. Set them with Assignment nodes; read them as {"{{name}}"}.
+          </InfoTip>
+        </div>
         {variables.map((v, i) => (
           <div key={i} className="grid grid-cols-[1fr_90px_auto] gap-1">
             <Input

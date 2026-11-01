@@ -96,7 +96,7 @@ export class DbRunStore implements RunStore {
 
   async appendStep(step: StepRecord) {
     if (await this.zeroRetention(step.runId))
-      step = { ...step, input: undefined, output: undefined, promptRedacted: undefined };
+      step = { ...step, input: undefined, output: undefined, promptRedacted: undefined, debug: undefined };
     await this.db.insert(runSteps).values({
       runId: step.runId,
       stepIndex: step.stepIndex,
@@ -106,6 +106,7 @@ export class DbRunStore implements RunStore {
       inputJson: step.input ?? null,
       outputJson: step.output ?? null,
       promptRedacted: step.promptRedacted ?? null,
+      debugJson: step.debug ?? null,
       model: step.model ?? null,
       tokensIn: step.tokensIn ?? null,
       tokensOut: step.tokensOut ?? null,

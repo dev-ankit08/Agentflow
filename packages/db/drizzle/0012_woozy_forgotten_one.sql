@@ -1,0 +1,1 @@
+ALTER TABLE "run_steps" ADD COLUMN "debug_json" jsonb;

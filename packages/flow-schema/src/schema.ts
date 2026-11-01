@@ -48,6 +48,12 @@ const nodeBase = {
 
 export const StartConfig = z.looseObject({});
 
+/**
+ * Context rules (YAML): which context this AI step receives, decided from variables without AI. Matching blocks
+ * go where the system prompt says {{context}}, or at its end. See expression-engine/src/context-rules.ts.
+ */
+const contextRules = z.string().max(50_000).optional();
+
 export const AgentConfig = z.object({
   model: ModelRef,
   fallbackModel: ModelRef.optional(),
@@ -60,6 +66,7 @@ export const AgentConfig = z.object({
   maxToolCalls: z.number().int().min(0).max(32).optional(),
   /** false: never answer this agent from the workspace response cache. */
   cache: z.boolean().optional(),
+  contextRules,
 });
 
 export const DecisionOutcome = z.object({
@@ -189,10 +196,12 @@ export const SupervisorConfig = z.object({
         systemPrompt: template,
         model: ModelRef.optional(),
         tools: z.array(z.string()).optional(),
+        contextRules,
       }),
     )
     .min(1, "Add at least one worker agent"),
   maxSteps: z.number().int().min(1).max(20).default(6),
+  contextRules,
 });
 
 /**
@@ -220,6 +229,7 @@ export const ParallelConfig = z.object({
         model: ModelRef,
         systemPrompt: template,
         userPrompt: template.default("{{trigger.message}}"),
+        contextRules,
       }),
     )
     .min(2, "Add at least two parallel tasks"),

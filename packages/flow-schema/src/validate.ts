@@ -1,4 +1,4 @@
-import { checkFormula, checkTemplate } from "@agentflow/expression-engine";
+import { checkContextRules, checkFormula, checkTemplate } from "@agentflow/expression-engine";
 import { parseCron } from "./cron";
 import { Flow, fixedHandles, terminalTypes, type NodeDef } from "./schema";
 
@@ -90,6 +90,22 @@ function formulaFields(node: NodeDef): [string, string][] {
   }
 }
 
+/** Context rules (YAML) on AI steps. */
+function contextRuleFields(node: NodeDef): [string, string][] {
+  const out: [string, string][] = [];
+  const add = (path: string, src: string | undefined) => {
+    if (src?.trim()) out.push([path, src]);
+  };
+  if (node.type === "agent") add("config.contextRules", node.config.contextRules);
+  if (node.type === "supervisor") {
+    add("config.contextRules", node.config.contextRules);
+    node.config.workers.forEach((w, i) => add(`config.workers.${i}.contextRules`, w.contextRules));
+  }
+  if (node.type === "parallel")
+    node.config.tasks.forEach((t, i) => add(`config.tasks.${i}.contextRules`, t.contextRules));
+  return out;
+}
+
 function outputHandles(node: NodeDef): string[] | null {
   if (node.type === "decision") return [...node.config.outcomes.map((o) => o.id), node.config.defaultOutcome];
   return fixedHandles[node.type] ?? null;
@@ -177,6 +193,14 @@ export function validateFlow(input: unknown): ValidationResult {
     }
     for (const [path, value] of [...templateFields(node), ...httpTemplateFields(node)]) {
       for (const issue of checkTemplate(value)) errors.push({ message: issue.message, nodeId: node.id, path });
+    }
+    for (const [path, value] of contextRuleFields(node)) {
+      if (SECRET_IN_TEMPLATE.test(value)) {
+        errors.push({ message: "Secrets cannot be used in context rules", nodeId: node.id, path });
+      }
+      for (const issue of checkContextRules(value)) {
+        errors.push({ message: `Context rules, line ${issue.line}: ${issue.message}`, nodeId: node.id, path });
+      }
     }
     for (const [path, value] of formulaFields(node)) {
       if (value.includes("{{")) {

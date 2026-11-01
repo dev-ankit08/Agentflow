@@ -47,7 +47,7 @@ export default async function ConnectorsPage({
           <Card key={c.id}>
             <CardHeader
               title={c.name}
-              description={
+              subtitle={
                 <span className="font-mono text-xs">
                   {c.config.url ?? c.config.command} · auth: {c.authType}
                   {c.refreshedAt && ` · refreshed ${new Date(c.refreshedAt).toLocaleString()}`}

@@ -7,7 +7,7 @@ import { feedback, flows } from "@agentflow/db";
 import { Flow } from "@agentflow/flow-schema";
 import { HttpError } from "../auth";
 import type { Deps } from "../app";
-import { openSse } from "../sse";
+import { isPublicEvent, openSse } from "../sse";
 import { widgetSettingsOf, type WidgetSettings } from "./publish";
 import { chooseVersion } from "../automation";
 
@@ -19,9 +19,13 @@ const SendMessage = z.object({ message: z.string().trim().min(1).max(4000), sess
 
 const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 
-/** With no allowed origins configured, only local pages may embed the agent. */
-export function originAllowed(origin: string | undefined, widget: WidgetSettings) {
+/**
+ * With no allowed origins configured, only local pages and the builder itself (its Live preview) may embed the
+ * agent.
+ */
+export function originAllowed(origin: string | undefined, widget: WidgetSettings, builderOrigin?: string) {
   if (!origin) return true;
+  if (origin === builderOrigin) return true;
   if (widget.allowedOrigins.length === 0) return LOCAL_ORIGIN.test(origin);
   return widget.allowedOrigins.includes(origin);
 }
@@ -44,6 +48,7 @@ function makeLimiter(limit: number, windowMs: number) {
 /** Public endpoints used by the embeddable widget (docs/02-feature-spec.md §7.1). */
 export async function widgetRoutes(app: FastifyInstance, { db, executor, store, secrets, config, billing }: Deps) {
   const limiter = makeLimiter(30, 60_000);
+  const builderOrigin = new URL(config.appUrl).origin;
   const sign = (runId: string) =>
     createHmac("sha256", config.API_JWT_SECRET).update(`widget:${runId}`).digest("base64url");
   const verify = (runId: string, token: string) => {
@@ -56,7 +61,7 @@ export async function widgetRoutes(app: FastifyInstance, { db, executor, store, 
     const [flow] = await db.select().from(flows).where(eq(flows.widgetKey, req.params.key));
     if (!flow) throw new HttpError(404, "Unknown widget");
     const widget = widgetSettingsOf(flow.settings);
-    if (!originAllowed(req.headers.origin, widget))
+    if (!originAllowed(req.headers.origin, widget, builderOrigin))
       throw new HttpError(403, "This website is not allowed to use this agent");
     if (!limiter(`${req.ip}:${req.params.key}`)) throw new HttpError(429, "Too many messages; please wait a moment");
     return { flow, widget };
@@ -109,7 +114,7 @@ export async function widgetRoutes(app: FastifyInstance, { db, executor, store, 
           endUserId: typeof user.id === "string" ? user.id : null,
         },
         (event) => {
-          sse.send(event);
+          if (isPublicEvent(event)) sse.send(event);
           if (event.type === "run_started")
             sse.sendRaw("session", { runId: event.runId, sessionToken: sign(event.runId) });
         },
@@ -136,7 +141,7 @@ export async function widgetRoutes(app: FastifyInstance, { db, executor, store, 
     if (run.status !== "waiting_input") throw new HttpError(409, "This conversation has ended; please start a new one");
     const sse = openSse(reply);
     try {
-      await executor.sendMessage(run.id, body.message, sse.send);
+      await executor.sendMessage(run.id, body.message, (event) => isPublicEvent(event) && sse.send(event));
     } catch (error) {
       sse.send({ type: "error", message: (error as Error).message });
     } finally {

@@ -301,6 +301,48 @@ When asked:
 
 See `docs/03-architecture.md` §3.7/§10.
 
+## 4d. Friendlier builder and step debugger (branch `builder-ux`)
+
+- **Tooltips:** `Tooltip` / `InfoTip` in `packages/ui/src/tooltip.tsx` (portal; hover and keyboard focus; Esc closes).
+  `Field` hints, `PageHeader` / `CardHeader` `description` and the editor's `Row` `hint` render as ⓘ tooltips.
+  Facts that must stay visible use `subtitle` (headers) or `note` (`Row`); explanations without a field use
+  `HowItWorks`.
+- **Panels:** `useStoredState` (`apps/builder/src/lib/use-stored-state.ts`) remembers the layout per browser
+  (`af-editor-panels`, `af-sidebar`). The palette (`palette.tsx`: search, collapsible groups, icon rail) and the
+  inspector collapse with `[` and `]`; `\` toggles focus mode; `T` opens the console; `?` lists shortcuts. The test
+  console minimizes without losing the run, resizes by dragging its top edge, and can hide its chat or timeline. The
+  app sidebar collapses to icons and has a mobile menu.
+- **Debugger:** the runtime records a `StepDebug` per step (`packages/runtime/src/debug.ts`): a compact snapshot of
+  what the step could read, a diff of what it changed, and the prompts AI steps sent (system, context-rule block, user,
+  history turns, tools). Prompts are recorded before the call, so failed calls keep them. The data is redacted, stored
+  in `run_steps.debug_json` (migration 0012), sent on `step_completed`, dropped in zero-retention mode, and never
+  streamed to widget visitors (`isPublicEvent` in `apps/api/src/sse.ts`; before this, step events with raw outputs
+  reached the widget). `StepDebugger` (`components/editor/step-debugger.tsx`) shows it in the test console and on
+  Runs & Traces.
+- **Validation:** when errors block a test, the console lists them, and clicking one selects the node.
+- **Still open:** collapsible sections on every node type (only the Agent's output and tools so far), a node-card badge
+  for steps with debug data, and comparing two runs side by side.
+
+## 4c. Deterministic context rules (branch `context-rules`)
+
+- **Engine:** `packages/expression-engine/src/context-rules.ts` (the `yaml` dependency). It provides
+  `parseContextRules`, `checkContextRules` (YAML errors with line numbers, shape, formulas, templates) and
+  `renderContextRules(source, scope) → { text, trace }`.
+  - Rule kinds: `when`/`include`/`else`, `switch`/`cases`/`default`, `first` (else-if chain), and an
+    always-included `include` with optional `title` and `id`.
+  - Limits: 50 rules and 20,000 characters per block.
+- **Schema:** an optional `contextRules` (YAML string) on `AgentConfig`, `SupervisorConfig`, Supervisor `workers[]`
+  and Parallel `tasks[]`. `validateFlow` reports rule errors (and secrets) with the node and path.
+- **Runtime:** `withContext` in `packages/runtime/src/context.ts` puts matched blocks at `{{context}}` in the system
+  prompt, or in a "## Context" section at the end. The trace is in the step output as `contextRules`. The response
+  cache key uses the rendered prompt, so different matches never share an answer.
+- **Builder:** `ContextRulesField` (YAML box, live errors, "Insert example", syntax help, and a preview against
+  sample JSON shaped like the step's variables), on the Agent, the Supervisor and its specialists, and Parallel
+  tasks. Canvas cards show the rule count.
+- **Example:** the Order support example's Answer agent uses rules (VIP, plus a `switch` on
+  `lookup.result.status`), and the AI flow generator knows the field.
+- **Still open:** a visual rule builder over the same YAML, and rules on non-AI messages (End and Handoff replies).
+
 ## 4b. Review fixes (branch `review-fixes`)
 
 A three-way review of `main` after PR #1 found about 29 issues. All are fixed, with tests:
