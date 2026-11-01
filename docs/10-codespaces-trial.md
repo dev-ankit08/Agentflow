@@ -51,7 +51,9 @@ own key, set a monthly budget in **Settings → Budget and ROI baseline** first.
   GitHub → Settings → Codespaces → Default idle timeout). The link stops working while it is stopped. Data is kept.
 - **Start it again:** open github.com/codespaces and click the codespace. The app restarts by itself; if not, run
   `bash .devcontainer/start.sh` in the terminal. The link stays the same; port visibility may need setting again.
-- **After pulling new code:** run `corepack pnpm install && corepack pnpm build`, then `bash .devcontainer/start.sh`.
+- **After pulling new code:** run
+  `corepack pnpm install && node .devcontainer/write-env.mjs && corepack pnpm build && bash .devcontainer/start.sh`
+  (settings are written before the build because the build reads them).
 - **Logs:** `.data/logs/<service>.log` (builder, api, worker, db, mock-llm, demo-mcp).
 - **Delete it** from github.com/codespaces when the trial ends; that deletes its data too.
 
