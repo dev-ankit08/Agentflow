@@ -273,7 +273,20 @@ Estimates are rough engineering days for this codebase.
       and a JSON config.
     - Verified with the official MCP client in tests, and with curl against the live Order support flow.
     - **Still open:** OAuth for MCP clients, and per-flow input schemas taken from the Start node.
-20. **AI flow generator (AI-1):** plain text → draft flow JSON, validated by `validateFlow` and repaired if invalid.
+20. **AI flow generator (AI-1) — done** on branch `e2e-and-leftovers`. The code is in `apps/api/src/generator.ts`.
+    - Prompt: a compact node catalogue, the wiring rules and the Order support flow as an example. The model returns
+      JSON.
+    - `normalise` fills in a Start node, labels and the chosen model on every model-using node, and lays nodes out
+      left to right.
+    - `validateFlow` errors go back to the model for up to 2 repairs. The last attempt is saved as a new draft
+      either way, and its remaining issues are returned.
+    - Endpoint: `POST /v1/flows/generate { description, model, name? }`. It needs `flows.edit`, checks the AI
+      budget, is audited, and each model call has a 90 s timeout.
+    - Flows page: "✦ Describe a flow and let AI draft it".
+    - Verified with scripted model answers (valid first time, repaired, repairs exhausted) and end to end with the
+      mock model. **Output quality is not yet judged against a real model.**
+    - Found and fixed along the way: the mock model's schema detection was greedy, and a crash left requests hanging;
+      it now answers 500.
 21. **Voice channel (VO-1):** WebRTC with STT/TTS.
 22. **Self-host package (SH-1)** and **SOC 2 readiness (SOC-1).**
 

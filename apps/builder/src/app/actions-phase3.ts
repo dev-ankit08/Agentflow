@@ -208,3 +208,19 @@ export async function saveRole(form: FormData) {
 export async function deleteRole(form: FormData) {
   await attempt("/settings", () => call(`/v1/roles/${field(form, "id")}`, "DELETE"), "Role deleted");
 }
+
+export async function generateFlowFromDescription(form: FormData) {
+  let id = "";
+  let issues = 0;
+  await attempt("/flows", async () => {
+    const res = (await call("/v1/flows/generate", "POST", {
+      description: field(form, "description"),
+      model: { provider: field(form, "provider"), name: field(form, "model") },
+      name: field(form, "name") || undefined,
+    })) as { id: string; issues: unknown[] };
+    id = res.id;
+    issues = res.issues.length;
+  });
+  // Open the draft; the editor's issues panel lists anything the model couldn't get right.
+  redirect(`/flows/${id}${issues ? "?generated=issues" : ""}`);
+}

@@ -47,7 +47,8 @@ export function mockReply(body: { messages: Msg[]; tools?: Tool[]; response_form
     .map((m) => m.content ?? "")
     .join("\n");
 
-  const schemaMatch = /matches this JSON Schema:\n(\{[\s\S]*\})/.exec(system);
+  // The gateway writes the schema on one line; other system text may contain braces too.
+  const schemaMatch = /matches this JSON Schema:\n(\{.*\})/.exec(system);
   if (schemaMatch) {
     const schema = JSON.parse(schemaMatch[1]!) as { properties?: Record<string, Prop> };
     return { content: JSON.stringify(fill(schema.properties ?? {}, user)) };

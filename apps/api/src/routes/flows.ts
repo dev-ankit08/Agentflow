@@ -2,11 +2,18 @@ import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { flows, newId } from "@agentflow/db";
-import { blankFlow, validateFlow, type FlowInput } from "@agentflow/flow-schema";
+import { ModelRef, blankFlow, validateFlow, type FlowInput } from "@agentflow/flow-schema";
 import { HttpError, currentUser, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
+import { generateFlow } from "../generator";
+import { makeServicesFor } from "../workspace-services";
 
 const CreateFlow = z.object({ name: z.string().trim().min(1).max(120) });
+const GenerateFlow = z.object({
+  description: z.string().trim().min(10, "Describe the flow in a sentence or two").max(4000),
+  model: ModelRef,
+  name: z.string().trim().min(1).max(120).optional(),
+});
 /** Drafts may be invalid while being edited; only the outer shape is required to save. */
 const SaveDraft = z.object({
   draft: z.looseObject({ nodes: z.array(z.unknown()), edges: z.array(z.unknown()) }),
@@ -15,7 +22,7 @@ const SaveDraft = z.object({
   force: z.boolean().optional(),
 });
 
-export async function flowRoutes(app: FastifyInstance, { db, auth }: Deps) {
+export async function flowRoutes(app: FastifyInstance, { db, auth, gatewayFor }: Deps) {
   const findFlow = async (workspaceId: string, id: string) => {
     const [flow] = await db
       .select()
@@ -44,6 +51,43 @@ export async function flowRoutes(app: FastifyInstance, { db, auth }: Deps) {
       .values({ id, workspaceId: ws.id, name, draftJson: blankFlow(id, name), createdBy: currentUser(req).id })
       .returning({ id: flows.id, name: flows.name });
     return reply.code(201).send(flow);
+  });
+
+  /** AI flow generator (AI-1): drafts a flow from a description; the draft may still need fixes, listed in issues. */
+  app.post("/flows/generate", { preHandler: auth.requireWorkspace("builder") }, async (req, reply) => {
+    const body = GenerateFlow.parse(req.body);
+    const ws = currentWorkspace(req);
+    await makeServicesFor(
+      db,
+      gatewayFor,
+    )(ws.id)
+      .checkBudget?.()
+      .catch((e: Error) => {
+        throw new HttpError(402, e.message);
+      });
+    const id = newId("flw");
+    let result;
+    try {
+      result = await generateFlow(gatewayFor(ws.id), {
+        description: body.description,
+        model: body.model,
+        flowId: id,
+        name: body.name,
+      });
+    } catch (error) {
+      throw new HttpError(502, `The model could not draft a flow: ${(error as Error).message}`);
+    }
+    const [flow] = await db
+      .insert(flows)
+      .values({
+        id,
+        workspaceId: ws.id,
+        name: result.draft.name,
+        draftJson: result.draft,
+        createdBy: currentUser(req).id,
+      })
+      .returning({ id: flows.id, name: flows.name });
+    return reply.code(201).send({ ...flow, attempts: result.attempts, issues: result.issues });
   });
 
   app.get<{ Params: { id: string } }>("/flows/:id", { preHandler: auth.requireWorkspace("viewer") }, async (req) => {

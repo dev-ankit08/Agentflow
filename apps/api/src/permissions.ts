@@ -37,6 +37,7 @@ export const presetPermissions = (role: Role): Permission[] =>
 /** Which permission each protected route needs (method + route pattern, as Fastify reports it). */
 export const ROUTE_PERMISSIONS: Record<string, Permission> = {
   "POST /v1/flows": "flows.edit",
+  "POST /v1/flows/generate": "flows.edit",
   "PUT /v1/flows/:id/draft": "flows.edit",
   "POST /v1/flows/:id/test-runs": "flows.edit",
   "POST /v1/runs/:id/messages": "flows.edit",

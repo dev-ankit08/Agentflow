@@ -38,8 +38,16 @@ export function startMockLlm(port: number, { delayMs = 15 } = {}): Promise<Serve
     }
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw);
-    const reply = mockReply(body);
+    let body: Parameters<typeof mockReply>[0] & { model?: string };
+    let reply: ReturnType<typeof mockReply>;
+    try {
+      body = JSON.parse(raw);
+      reply = mockReply(body);
+    } catch (error) {
+      // Answer instead of leaving the request hanging.
+      res.writeHead(500, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: `mock model failed: ${(error as Error).message}` } }));
+    }
     const usage = { prompt_tokens: Math.ceil(raw.length / 4), completion_tokens: 0 };
     const base = { id: "mock", object: "chat.completion.chunk", model: body.model };
 

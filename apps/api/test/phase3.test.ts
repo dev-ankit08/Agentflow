@@ -794,6 +794,29 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect((await call(owner.id, "GET", `/v1/flows/${flowId}/mcp`)).json()).toMatchObject({ enabled: false });
   });
 
+  it("drafts a flow from a description, reporting what still needs fixing", async () => {
+    const res = await call(builder.id, "POST", "/v1/flows/generate", {
+      description: "Answer shipping questions and hand refunds to a person",
+      model: { provider: "openai_compatible", name: "mock-1" },
+      name: "Generated support",
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    // The mock model can't design flows, so repairs run out and the draft comes back with its issues.
+    expect(body).toMatchObject({ name: "Generated support", attempts: 3 });
+    expect(body.issues.length).toBeGreaterThan(0);
+    const flow = (await call(builder.id, "GET", `/v1/flows/${body.id}`)).json();
+    expect(flow.draftJson.nodes.some((n: { type: string }) => n.type === "start")).toBe(true);
+    expect(
+      (
+        await call(builder.id, "POST", "/v1/flows/generate", {
+          description: "short",
+          model: { provider: "openai_compatible", name: "mock-1" },
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+
   it("records configuration changes in the audit log", async () => {
     await call(owner.id, "PUT", "/v1/workspace/settings", { retention: { days: 90 } });
     const log = (await call(owner.id, "GET", "/v1/audit")).json();

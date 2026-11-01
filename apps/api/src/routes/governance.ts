@@ -9,6 +9,7 @@ import { csvCell } from "../csv";
 /** Readable names for audited routes. Routes not listed here (drafts, test runs, searches, comments) are not audited. */
 const AUDITED: Record<string, string> = {
   "POST /v1/flows": "Created flow",
+  "POST /v1/flows/generate": "Generated flow with AI",
   "DELETE /v1/flows/:id": "Deleted flow",
   "POST /v1/flows/:id/publish": "Published flow",
   "POST /v1/flows/:id/versions/:versionId/rollback": "Rolled back flow",
