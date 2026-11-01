@@ -160,6 +160,25 @@ describe("validateFlow", () => {
     );
   });
 
+  it("checks context rules on AI steps", () => {
+    const f = clone(orderSupportFlow);
+    const answer = f.nodes.find((n) => n.id === "answer")!;
+    if (answer.type !== "agent") throw new Error("answer is an agent");
+    answer.config.contextRules = `- when: user.plan == "vip"\n  include: VIP customer.`;
+    expect(validateFlow(f).ok).toBe(true);
+
+    answer.config.contextRules = `- when: user.plan == "vip"`;
+    const result = validateFlow(f);
+    expect(result.errors).toContainEqual({
+      message: 'Context rules, line 1: Rule 1: "when" needs an "include"',
+      nodeId: "answer",
+      path: "config.contextRules",
+    });
+
+    answer.config.contextRules = `- include: "Key {{secret.STRIPE}}"`;
+    expect(messages(f)).toContain("Secrets cannot be used in context rules");
+  });
+
   it("warns about unreachable nodes", () => {
     const f = clone(blankFlow("f", "f"));
     f.nodes.push({ id: "orphan", type: "end", label: "Orphan", position: { x: 0, y: 0 }, config: {} });

@@ -8,6 +8,7 @@ import { ExtraFields, type FlowSummary, type SourceSummary } from "./inspector-e
 import { NodeComments, OrchestrationFields, TriggersPanel, type FlowComment } from "./inspector-orchestration";
 import { nodeMeta, type ConnectorSummary } from "./model";
 import { PromptLibrary } from "./prompt-library";
+import { ContextRulesField } from "./context-rules-field";
 
 type Props = {
   node: NodeDef;
@@ -122,6 +123,12 @@ export function Inspector({
               onUse={(systemPrompt) => set<typeof node>((n) => ({ ...n, config: { ...n.config, systemPrompt } }))}
             />
           </Row>
+          <ContextRulesField
+            value={node.config.contextRules ?? ""}
+            suggestions={suggestions}
+            disabled={readOnly}
+            onChange={(contextRules) => set<typeof node>((n) => ({ ...n, config: { ...n.config, contextRules } }))}
+          />
           <Row label="User message">
             <TemplateField
               value={node.config.userPrompt}

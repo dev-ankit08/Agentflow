@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { nextCronRun, parseCron, type FlowInput, type NodeDef } from "@agentflow/flow-schema";
 import { Button, Input, Select } from "@agentflow/ui";
 import { FormulaField, ModelPicker, Row, TemplateField } from "./fields";
+import { ContextRulesField } from "./context-rules-field";
 import { uniqueId } from "./model";
 
 type Suggestions = { path: string; hint: string }[];
@@ -47,6 +48,12 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
               onChange={(instructions) => set({ instructions })}
             />
           </Row>
+          <ContextRulesField
+            value={node.config.contextRules ?? ""}
+            suggestions={suggestions}
+            disabled={readOnly}
+            onChange={(contextRules) => set({ contextRules })}
+          />
           <Row label="Task">
             <TemplateField
               value={node.config.task}
@@ -97,6 +104,12 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
                       onChange={(systemPrompt) => setWorker(i, { systemPrompt })}
                     />
                   </Row>
+                  <ContextRulesField
+                    value={w.contextRules ?? ""}
+                    suggestions={suggestions}
+                    disabled={readOnly}
+                    onChange={(contextRules) => setWorker(i, { contextRules })}
+                  />
                   <label className="flex items-center gap-2 text-[11px] text-text">
                     <input
                       type="checkbox"
@@ -217,6 +230,12 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
                     onChange={(systemPrompt) => setTask(i, { systemPrompt })}
                   />
                 </Row>
+                <ContextRulesField
+                  value={t.contextRules ?? ""}
+                  suggestions={suggestions}
+                  disabled={readOnly}
+                  onChange={(contextRules) => setTask(i, { contextRules })}
+                />
                 <Row label="User message">
                   <TemplateField
                     value={t.userPrompt}

@@ -81,9 +81,21 @@ export const orderSupportFlow: FlowInput = {
       position: { x: 1000, y: -120 },
       config: {
         model: { provider: "openai", name: "gpt-5" },
-        systemPrompt:
-          'You are a friendly support agent. Use only the order data provided.{{#if user.plan == "vip"}} The customer is VIP: offer free express shipping on the next order.{{/if}}',
+        systemPrompt: "You are a friendly support agent. Use only the order data provided.",
         userPrompt: "Question: {{trigger.message}}\nOrder: {{lookup.result}}",
+        // Deterministic context: only the guidance that fits this customer and order reaches the model.
+        contextRules: [
+          "- id: vip",
+          '  when: user.plan == "vip"',
+          "  include: The customer is VIP. Offer free express shipping on the next order.",
+          "- id: status",
+          "  switch: lookup.result.status",
+          "  cases:",
+          '    shipped: "The order has shipped. Give the delivery estimate ({{lookup.result.eta}}) and list the items."',
+          "    processing: The order is being prepared. Say it usually ships within 2 business days.",
+          "    delivered: The order was delivered. Ask whether everything arrived in good condition.",
+          "  default: If the order wasn't found, apologise and ask the customer to check the order number.",
+        ].join("\n"),
       },
     },
     {

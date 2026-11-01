@@ -1,6 +1,7 @@
 import { evaluate, isTruthy, renderTemplate } from "@agentflow/expression-engine";
 import type { NodeDef } from "@agentflow/flow-schema";
 import type { ChatMessage } from "@agentflow/llm-gateway";
+import { withContext } from "./context";
 import { runGuardrail, untrusted } from "./guardrails";
 import { orchestrationHandlers } from "./handlers-orchestration";
 import { redactPII } from "./redact";
@@ -20,7 +21,8 @@ const agent: NodeHandler<Of<"agent">> = {
   async run(ctx, node) {
     const c = node.config;
     const scope = ctx.scope();
-    const system = renderTemplate(c.systemPrompt, scope);
+    // Context rules decide, from variables, which context blocks this agent receives.
+    const { system, trace: contextTrace } = withContext(c.systemPrompt, c.contextRules, scope);
     const user = renderTemplate(c.userPrompt, scope);
     // Earlier turns of the conversation, so agents keep context in multi-turn chats.
     const history = ctx.state.conversation.slice(0, -1);
@@ -54,6 +56,7 @@ const agent: NodeHandler<Of<"agent">> = {
           usage: { inputTokens: 0, outputTokens: 0 },
           model: c.model.name,
           cached: true,
+          ...(contextTrace && { contextRules: contextTrace }),
         },
       };
     }
@@ -105,6 +108,7 @@ const agent: NodeHandler<Of<"agent">> = {
             toolCalls,
             usage: { inputTokens: tokensIn, outputTokens: tokensOut },
             model: res.model.name,
+            ...(contextTrace && { contextRules: contextTrace }),
           },
         };
       }

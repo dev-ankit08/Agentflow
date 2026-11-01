@@ -47,6 +47,10 @@ and tested against local fakes, but **not yet against the real services** — se
     overwriting someone else's save.
 23. **WordPress**: a plugin in `integrations/wordpress/agentflow` adds the widget (bubble or `[agentflow]` shortcode) and
     signs in logged-in WordPress users.
+24. **Deterministic context rules**: every AI step (Agent, Supervisor and its specialists, Parallel tasks) can have
+    YAML rules (`when`/`else`, `switch`/`cases`, `first`, `title`). They are evaluated from variables without
+    AI, so only the matching context reaches the model. The editor checks rules as you type and previews the exact
+    context for sample values, and each run records which rules matched.
 
 ## Packages
 

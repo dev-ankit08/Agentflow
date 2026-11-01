@@ -454,3 +454,139 @@ describe("loop state across turns", () => {
     expect((await t.store.load(runId))!.state.loops).toEqual({ each: { items: [1, 2, 3], index: 1, results: [] } });
   });
 });
+
+describe("context rules on AI steps", () => {
+  /** A stand-in model that records every system prompt it receives. */
+  function recordingSetup() {
+    const systems: string[] = [];
+    const store = new MemoryRunStore();
+    const gateway = new LLMGateway({
+      resolveCredentials: async () => ({ apiKey: "k" }),
+      providers: {
+        openai_compatible: {
+          id: "openai_compatible",
+          chat: async (req) => {
+            systems.push(
+              req.messages
+                .filter((m) => m.role === "system")
+                .map((m) => (m as { content: string }).content)
+                .join("\n"),
+            );
+            return { text: "ok", toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: "stop" };
+          },
+        },
+      },
+    });
+    const executor = new InProcessExecutor({
+      store,
+      gatewayFor: () => gateway,
+      toolsFor: () => ({ describe: async () => [], call: async () => ({ data: null, text: "", isError: false }) }),
+      servicesFor: () => ({}),
+    });
+    return { systems, store, executor };
+  }
+  const rules = `- when: user.plan == "vip"
+  include: VIP customer. Offer free express shipping.
+  else: Standard customer.
+- switch: trigger.topic
+  cases:
+    refund: Refunds need a receipt.
+    shipping: Shipping takes 3 days.
+- title: Always
+  include: Be brief.`;
+  const agentFlow = (systemPrompt: string) =>
+    flow(
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "bot",
+          type: "agent",
+          label: "Bot",
+          position: at,
+          config: { model: mockModel, systemPrompt, userPrompt: "{{trigger.message}}", contextRules: rules },
+        },
+        { id: "end", type: "end", label: "End", position: at, config: {} },
+      ],
+      [
+        { id: "1", source: "start", target: "bot" },
+        { id: "2", source: "bot", target: "end" },
+      ],
+    );
+
+  it("sends only matching blocks, appended as a Context section, and records the trace", async () => {
+    const t = recordingSetup();
+    const runId = await t.executor.start(
+      {
+        ...base,
+        flow: agentFlow("You help customers."),
+        triggerType: "api",
+        input: { message: "hi", topic: "shipping" },
+        user: { plan: "vip" },
+      },
+      () => {},
+    );
+    expect(t.systems[0]).toBe(
+      "You help customers.\n\n## Context\nVIP customer. Offer free express shipping.\n\nShipping takes 3 days.\n\n### Always\nBe brief.",
+    );
+    expect(t.systems[0]).not.toContain("Refunds");
+    const out = (await t.store.load(runId))!.state.nodeOutputs.bot as { contextRules: unknown[] };
+    expect(out.contextRules).toEqual([
+      { rule: "1", matched: true, branch: "include" },
+      { rule: "2", matched: true, branch: "case:shipping" },
+      { rule: "3", matched: true, branch: "include" },
+    ]);
+  });
+
+  it("places the context where the prompt says {{context}}", async () => {
+    const t = recordingSetup();
+    await t.executor.start(
+      {
+        ...base,
+        flow: agentFlow("Rules:\n{{context}}\nEnd of rules."),
+        triggerType: "api",
+        input: { message: "hi", topic: "none" },
+      },
+      () => {},
+    );
+    expect(t.systems[0]).toBe("Rules:\nStandard customer.\n\n### Always\nBe brief.\nEnd of rules.");
+  });
+
+  it("applies rules to Supervisor specialists and Parallel tasks", async () => {
+    const t = recordingSetup();
+    const f = flow(
+      [
+        { id: "start", type: "start", label: "Start", position: at, config: {} },
+        {
+          id: "fan",
+          type: "parallel",
+          label: "Fan",
+          position: at,
+          config: {
+            tasks: [
+              {
+                id: "a",
+                label: "A",
+                model: mockModel,
+                systemPrompt: "Task A.",
+                contextRules: `- when: trigger.vip\n  include: A sees VIP.`,
+              },
+              { id: "b", label: "B", model: mockModel, systemPrompt: "Task B.", contextRules: `- include: B always.` },
+            ],
+          },
+        },
+        { id: "end", type: "end", label: "End", position: at, config: {} },
+      ],
+      [
+        { id: "1", source: "start", target: "fan" },
+        { id: "2", source: "fan", target: "end" },
+      ],
+    );
+    const runId = await t.executor.start(
+      { ...base, flow: f, triggerType: "api", input: { message: "hi", vip: false } },
+      () => {},
+    );
+    expect(t.systems.sort()).toEqual(["Task A.", "Task B.\n\n## Context\nB always."]);
+    const out = (await t.store.load(runId))!.state.nodeOutputs.fan as { contextRules: Record<string, unknown> };
+    expect(Object.keys(out.contextRules).sort()).toEqual(["a", "b"]);
+  });
+});
