@@ -100,10 +100,16 @@ Estimates are rough engineering days for this codebase.
    Memory. Run `php -l` on the plugin.
 2. **Real-credential integrations.** Follow `docs/08-integrations-setup.md` for Bedrock, Vertex, Slack, Teams, WhatsApp
    and Stripe (each needs a public URL, e.g. ngrok/cloudflared). Fix any adapter differences found.
-3. **End-to-end test (T-5, never built).**
-   1. Add Playwright to `apps/builder`.
-   2. Script: dev login → install a template → publish → chat through `/preview/[key]` → see the reply.
-   3. Add it to CI behind a flag.
+3. **End-to-end test (T-5) — done** on branch `e2e-and-leftovers`.
+   - `apps/builder/e2e/template-to-widget.spec.ts`: dev login → install Lead Qualification → publish → chat in
+     `/preview/[key]` → check for a new reply.
+   - Run it with `corepack pnpm --filter @agentflow/builder e2e` while the dev stack is up. It uses the installed Edge
+     browser; `E2E_CHANNEL=""` switches to bundled Chromium.
+   - In CI it is the opt-in `e2e` job: start it from the Actions tab, or set the repository variable `RUN_E2E=true`. It
+     has not run on GitHub yet.
+   - It found a real bug, now fixed: the Lead Qualification template had a node named `score` that hid the `score`
+     variable, so every installed copy failed on its first message. The validator now rejects node ids that clash with
+     variable names. Copies installed before the fix need their "Total score" node renamed (e.g. to `total`).
 
 ### P1 — Finish partly built Phase 2–3 items (~10–14 days)
 

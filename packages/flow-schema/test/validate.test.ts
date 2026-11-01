@@ -146,6 +146,20 @@ describe("validateFlow", () => {
     expect(messages(flow)).toContain('"Human" ends the run and cannot have outgoing connections');
   });
 
+  it("rejects a node id that is also a variable name", () => {
+    const f = clone(blankFlow("f", "f"));
+    f.nodes.push({
+      id: "score",
+      type: "assignment",
+      label: "Score",
+      position: { x: 0, y: 0 },
+      config: { assignments: [{ variable: "score", value: "1" }] },
+    });
+    expect(messages(f)).toContain(
+      'Node id "score" is also a variable name; rename the node so {{score}} is unambiguous',
+    );
+  });
+
   it("warns about unreachable nodes", () => {
     const f = clone(blankFlow("f", "f"));
     f.nodes.push({ id: "orphan", type: "end", label: "Orphan", position: { x: 0, y: 0 }, config: {} });

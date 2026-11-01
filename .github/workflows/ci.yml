@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
@@ -37,3 +38,54 @@ jobs:
       - run: pnpm db:migrate
       - run: pnpm test
       - run: pnpm build
+
+  # Browser test of the whole stack (template → publish → widget chat). Opt-in: run it from the Actions tab,
+  # or set the repository variable RUN_E2E=true to run it on every push.
+  e2e:
+    if: github.event_name == 'workflow_dispatch' || vars.RUN_E2E == 'true'
+    needs: check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: agentflow
+          POSTGRES_PASSWORD: agentflow
+          POSTGRES_DB: agentflow
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agentflow" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://agentflow:agentflow@localhost:5433/agentflow
+      API_JWT_SECRET: ci-api-jwt-secret
+      SECRETS_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      AUTH_SECRET: ci-auth-secret
+      AUTH_URL: http://localhost:3100
+      AUTH_DEV_LOGIN: "true"
+      API_URL: http://localhost:4000
+      PUBLIC_API_URL: http://localhost:4000
+      ALLOW_PRIVATE_HTTP: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm db:seed
+      - run: pnpm --filter @agentflow/builder exec playwright install --with-deps chromium
+      - name: Start the stack
+        run: |
+          pnpm demo > demo.log 2>&1 &
+          pnpm dev > dev.log 2>&1 &
+          npx --yes wait-on@8.0.3 --timeout 240000 http://localhost:4000/health http://localhost:3100/login
+      - run: pnpm --filter @agentflow/builder e2e
+      - if: failure()
+        run: tail -n 100 dev.log demo.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: apps/builder/test-results
