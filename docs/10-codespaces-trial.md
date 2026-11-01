@@ -41,8 +41,10 @@ Private ports only work for you while signed in to GitHub; public ports work for
 
 ## 4. Add a real model
 
-Until a model key is added, replies come from the bundled mock model. Each workspace adds its own key in
-**Settings → Model provider keys** (see the User Guide), then picks the model on each AI step. If you share your
+Every workspace in the trial starts with a free **Demo model** and the **Demo orders** connector, so templates run
+straight away (pick Provider "OpenAI-compatible", model `mock-1`, which the template wizard preselects). Its replies
+are canned, not real answers. For real answers, a workspace adds its own key in **Settings → Model provider keys**
+(see the User Guide), then picks that model on each AI step. If you share your
 own key, set a monthly budget in **Settings → Budget and ROI baseline** first.
 
 ## Day to day

@@ -4,13 +4,14 @@ import { z } from "zod";
 import { invites, memberships, orgs, workspaces } from "@agentflow/db";
 import { currentUser } from "../auth";
 import type { Deps } from "../app";
+import { provisionTrialDemo } from "../trial";
 
 const CreateOrg = z.object({
   orgName: z.string().trim().min(1).max(100),
   workspaceName: z.string().trim().min(1).max(100).default("Default"),
 });
 
-export async function accountRoutes(app: FastifyInstance, { db, auth }: Deps) {
+export async function accountRoutes(app: FastifyInstance, { db, auth, secrets, config }: Deps) {
   app.addHook("preHandler", auth.authenticate);
 
   /** Current user and their workspaces. Pending invites for the user's email are accepted here. */
@@ -58,6 +59,11 @@ export async function accountRoutes(app: FastifyInstance, { db, auth }: Deps) {
       await tx.insert(memberships).values({ userId: user.id, workspaceId: ws!.id, role: "owner" });
       return { id: ws!.id, name: ws!.name, orgId: org!.id, orgName: org!.name, role: "owner" as const };
     });
+    if (config.trialDemo.modelUrl || config.trialDemo.mcpUrl) {
+      await provisionTrialDemo(db, secrets, config.trialDemo, workspace.id).catch((err) =>
+        req.log.error({ err }, "trial demo provisioning failed"),
+      );
+    }
     return reply.code(201).send(workspace);
   });
 }

@@ -17,6 +17,7 @@ const app = await buildApp({
   allowPrivateHttp: config.ALLOW_PRIVATE_HTTP,
   publicApiUrl: config.PUBLIC_API_URL ?? `http://localhost:${config.API_PORT}`,
   appUrl: config.AUTH_URL,
+  trialDemo: { modelUrl: config.TRIAL_DEMO_MODEL_URL || undefined, mcpUrl: config.TRIAL_DEMO_MCP_URL || undefined },
   emailServer: config.EMAIL_SERVER || undefined,
   emailFrom: config.EMAIL_FROM,
   stripe: config.STRIPE_SECRET_KEY

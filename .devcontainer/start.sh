@@ -45,6 +45,8 @@ fi
 
 run mock-llm corepack pnpm --filter @agentflow/llm-gateway demo
 run demo-mcp corepack pnpm --filter @agentflow/mcp-client demo
+# The API gives workspaces the demo model and orders connector on start, so both must be up first.
+wait_port 4010 && wait_port 4020 || exit 1
 run api corepack pnpm --filter @agentflow/api start
 run worker corepack pnpm --filter @agentflow/worker start
 run builder corepack pnpm --filter @agentflow/builder start

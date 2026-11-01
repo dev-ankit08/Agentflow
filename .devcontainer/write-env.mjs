@@ -36,8 +36,11 @@ const values = {
   // actions must accept both.
   SERVER_ACTIONS_ALLOWED_ORIGINS: name ? `${host(3100)},localhost:3100` : "",
   AUTH_DEV_LOGIN: "false",
-  // The bundled demo model and orders server run on localhost inside the codespace.
+  // The bundled demo model and orders server run on localhost inside the codespace; every workspace gets them
+  // until it adds its own model key or connector, so templates run straight away.
   ALLOW_PRIVATE_HTTP: "true",
+  TRIAL_DEMO_MODEL_URL: "http://localhost:4010/v1",
+  TRIAL_DEMO_MCP_URL: "http://localhost:4020/mcp",
 };
 
 const lines = readFileSync(".env.example", "utf8")

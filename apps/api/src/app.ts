@@ -20,6 +20,7 @@ import { publishRoutes } from "./routes/publish";
 import { runRoutes } from "./routes/runs";
 import { templateRoutes } from "./routes/templates";
 import { widgetRoutes } from "./routes/widget";
+import { provisionTrialDemo, type TrialDemo } from "./trial";
 import { makeBilling, type Billing, type StripeConfig } from "./billing";
 import { defaultEndpoints, makeChannels, type ChannelEndpoints, type Channels } from "./channels";
 import { analyticsRoutes } from "./routes/analytics";
@@ -63,6 +64,8 @@ export type RuntimeConfig = {
   syncChannels: boolean;
   /** Builder address, for links in emails. */
   appUrl: string;
+  /** Hosted trials: demo model and connector given to workspaces without their own. */
+  trialDemo: TrialDemo;
 };
 
 export type Deps = {
@@ -102,6 +105,8 @@ export type AppOptions = {
   logger?: FastifyServerOptions["logger"];
   /** Builder address, for links in notifications. */
   appUrl?: string;
+  /** Hosted trials: give workspaces without a model key or connector the bundled demo ones. */
+  trialDemo?: TrialDemo;
   /** SMTP URL for approval emails (EMAIL_SERVER); emails are skipped without it. */
   emailServer?: string;
   emailFrom?: string;
@@ -199,9 +204,19 @@ export async function buildApp(opts: AppOptions) {
       publicApiUrl,
       syncChannels: Boolean(opts.syncChannels),
       appUrl,
+      trialDemo: opts.trialDemo ?? {},
     },
   };
   app.decorate("deps", deps);
+  // Workspaces created before the trial demo was configured get it too.
+  if (opts.trialDemo?.modelUrl || opts.trialDemo?.mcpUrl) {
+    const trialDemo = opts.trialDemo;
+    app.addHook("onReady", async () => {
+      await provisionTrialDemo(opts.db, opts.secrets, trialDemo)
+        .then((r) => app.log.info(r, "trial demo provisioned"))
+        .catch((err) => app.log.error({ err }, "trial demo provisioning failed"));
+    });
+  }
 
   await app.register(websocket);
   // The builder origin gets credentialed CORS; widget endpoints accept any origin and check it per widget.
