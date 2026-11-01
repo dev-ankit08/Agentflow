@@ -83,7 +83,10 @@ export function makeAuth(db: Db, jwtSecret: string) {
       if (!row) throw new HttpError(404, "Workspace not found");
       const custom = row.customRoleId ? ((row.customPermissions ?? []) as Permission[]) : null;
       const needed = custom ? ROUTE_PERMISSIONS[`${req.method} ${req.routeOptions.url}`] : undefined;
-      if (needed) {
+      if (min === "owner" && row.role !== "owner") {
+        // Owner-only actions (billing) can't be granted through a custom role.
+        throw new HttpError(403, "Requires owner role");
+      } else if (needed) {
         if (!custom!.includes(needed)) throw new HttpError(403, `Your role does not allow this (${needed})`);
       } else if (!hasRole(row.role, min)) {
         throw new HttpError(403, `Requires ${min} role or higher`);

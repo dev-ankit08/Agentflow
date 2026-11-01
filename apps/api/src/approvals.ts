@@ -2,10 +2,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { createTransport } from "nodemailer";
-import { approvals, flows, memberships, runs, users, workspaces, type Db, type Role } from "@agentflow/db";
+import { approvals, customRoles, flows, memberships, runs, users, workspaces, type Db, type Role } from "@agentflow/db";
 import type { RunExecutor } from "@agentflow/runtime";
 import type { SecretStore } from "@agentflow/secret-store";
-import { HttpError, hasRole } from "./auth";
+import { HttpError } from "./auth";
+import { canDecideApproval } from "./permissions";
 import type { Channels } from "./channels";
 
 /** Outgoing notifications (H5); swapped for fakes in tests. */
@@ -146,12 +147,19 @@ export async function notifyApprovers(
 
   if (prefs.emailApprovers !== false) {
     const members = await db
-      .select({ id: users.id, email: users.email, role: memberships.role })
+      .select({
+        id: users.id,
+        email: users.email,
+        role: memberships.role,
+        customRoleId: memberships.customRoleId,
+        customPermissions: customRoles.permissions,
+      })
       .from(memberships)
       .innerJoin(users, eq(users.id, memberships.userId))
+      .leftJoin(customRoles, eq(customRoles.id, memberships.customRoleId))
       .where(eq(memberships.workspaceId, approval.workspaceId));
     for (const m of members) {
-      if (!m.email || !hasRole(m.role, approval.approverRole as Role)) continue;
+      if (!m.email || !canDecideApproval(m, approval.approverRole as Role)) continue;
       const link = (d: "approve" | "reject") => approvalLink(deps.publicApiUrl, deps.jwtSecret, approval.id, m.id, d);
       const subject = `Approval needed: ${flowName}`;
       const text = `${approval.message}\n\nApprove: ${link("approve")}\nReject: ${link("reject")}\n\nOr open the Inbox: ${inboxUrl}`;
@@ -211,16 +219,24 @@ export async function approvalLinkRoutes(
   async function load(approvalId: string, q: Record<string, string | undefined>) {
     const { userId, decision } = verifyLink(deps.jwtSecret, approvalId, q);
     const [row] = await db
-      .select({ approval: approvals, flowName: flows.name, role: memberships.role, email: users.email })
+      .select({
+        approval: approvals,
+        flowName: flows.name,
+        role: memberships.role,
+        customRoleId: memberships.customRoleId,
+        customPermissions: customRoles.permissions,
+        email: users.email,
+      })
       .from(approvals)
       .innerJoin(runs, eq(runs.id, approvals.runId))
       .innerJoin(flows, eq(flows.id, runs.flowId))
       .innerJoin(memberships, and(eq(memberships.workspaceId, approvals.workspaceId), eq(memberships.userId, userId)))
       .innerJoin(users, eq(users.id, userId))
+      .leftJoin(customRoles, eq(customRoles.id, memberships.customRoleId))
       .where(eq(approvals.id, approvalId));
     if (!row) throw new HttpError(404, "This approval no longer exists, or you are no longer a member");
-    if (!hasRole(row.role, row.approval.approverRole as Role))
-      throw new HttpError(403, `Requires ${row.approval.approverRole} role or higher`);
+    if (!canDecideApproval(row, row.approval.approverRole as Role))
+      throw new HttpError(403, "Your role can't decide this approval");
     return { ...row, userId, decision };
   }
 

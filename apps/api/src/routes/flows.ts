@@ -5,6 +5,7 @@ import { flows, newId } from "@agentflow/db";
 import { ModelRef, blankFlow, validateFlow, type FlowInput } from "@agentflow/flow-schema";
 import { HttpError, currentUser, currentWorkspace } from "../auth";
 import type { Deps } from "../app";
+import { applyDraftToLiveRoom } from "../collab";
 import { generateFlow } from "../generator";
 import { makeServicesFor } from "../workspace-services";
 
@@ -114,6 +115,7 @@ export async function flowRoutes(app: FastifyInstance, { db, auth, gatewayFor }:
         .update(flows)
         .set({ draftJson: next, name, updatedAt })
         .where(and(eq(flows.id, flow.id), eq(flows.workspaceId, ws.id)));
+      applyDraftToLiveRoom(flow.id, next);
       const { errors, warnings } = validateFlow(next);
       return { id: flow.id, updatedAt, validation: { ok: errors.length === 0, errors, warnings } };
     },

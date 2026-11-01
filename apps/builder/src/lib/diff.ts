@@ -11,8 +11,11 @@ export type DiffRow =
  * shown as one changed row.
  */
 export function lineDiff(before: string, after: string): DiffRow[] {
-  const a = before.split("\n").slice(0, 400);
-  const b = after.split("\n").slice(0, 400);
+  const LIMIT = 400;
+  const all = (t: string) => (t === "" ? [] : t.split("\n"));
+  const [fullA, fullB] = [all(before), all(after)];
+  const a = fullA.slice(0, LIMIT);
+  const b = fullB.slice(0, LIMIT);
   const lcs = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
   for (let i = a.length - 1; i >= 0; i--)
     for (let j = b.length - 1; j >= 0; j--)
@@ -52,6 +55,8 @@ export function lineDiff(before: string, after: string): DiffRow[] {
     }
     if (k < raw.length) rows.push(raw[k]!);
   }
+  if (fullA.length > LIMIT || fullB.length > LIMIT)
+    rows.push({ kind: "same", left: `… only the first ${LIMIT} lines are compared`, right: "" });
   return rows;
 }
 

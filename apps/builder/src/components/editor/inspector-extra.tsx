@@ -2,7 +2,7 @@
 
 import { approverRoles, formFieldTypes, type NodeDef } from "@agentflow/flow-schema";
 import { Button, Input, Select } from "@agentflow/ui";
-import { FormulaField, Row, TemplateField } from "./fields";
+import { FormulaField, ListInput, Row, TemplateField } from "./fields";
 import type { ConnectorSummary } from "./model";
 
 export type SourceSummary = { id: string; name: string };
@@ -76,7 +76,9 @@ export function ExtraFields({
               disabled={readOnly}
               className="h-8 text-xs"
               value={node.config.topK}
-              onChange={(e) => set({ topK: Math.min(10, Math.max(1, Number(e.target.value) || 4)) })}
+              onChange={(e) =>
+                set({ topK: Math.min(10, Math.max(1, e.target.value === "" ? 4 : Number(e.target.value))) })
+              }
             />
           </Row>
           <p className="rounded-lg bg-surface-2 p-2 text-[11px] text-muted">
@@ -131,7 +133,9 @@ export function ExtraFields({
                 disabled={readOnly}
                 className="h-8 text-xs"
                 value={node.config.timeoutMinutes}
-                onChange={(e) => set({ timeoutMinutes: Math.max(1, Number(e.target.value) || 1440) })}
+                onChange={(e) =>
+                  set({ timeoutMinutes: Math.max(1, e.target.value === "" ? 1440 : Number(e.target.value)) })
+                }
               />
             </Row>
           </div>
@@ -240,19 +244,12 @@ export function ExtraFields({
             </label>
           </div>
           <Row label="Blocked topics (comma-separated)">
-            <Input
-              value={checks.blockedTopics.join(", ")}
+            <ListInput
+              value={checks.blockedTopics}
               disabled={readOnly}
               placeholder="legal advice, competitors"
               className="h-8 text-xs"
-              onChange={(e) =>
-                setChecks({
-                  blockedTopics: e.target.value
-                    .split(",")
-                    .map((t) => t.trim())
-                    .filter(Boolean),
-                })
-              }
+              onChange={(blockedTopics) => setChecks({ blockedTopics })}
             />
           </Row>
           <div className="grid grid-cols-2 gap-2">
@@ -434,19 +431,12 @@ export function ExtraFields({
                 </label>
               </div>
               {f.type === "select" && (
-                <Input
-                  value={(f.options ?? []).join(", ")}
+                <ListInput
+                  value={f.options ?? []}
                   placeholder="Options, comma-separated"
                   disabled={readOnly}
                   className="h-7 text-[11px]"
-                  onChange={(e) =>
-                    setField(i, {
-                      options: e.target.value
-                        .split(",")
-                        .map((o) => o.trim())
-                        .filter(Boolean),
-                    })
-                  }
+                  onChange={(options) => setField(i, { options })}
                 />
               )}
             </div>

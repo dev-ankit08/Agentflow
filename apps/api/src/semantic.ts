@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { chunks, documents, workspaces, type Db } from "@agentflow/db";
 import type { LLMGateway, ModelRef } from "@agentflow/llm-gateway";
 import type { KnowledgeChunk } from "@agentflow/runtime";
+import { orQuery } from "./automation";
 
 /**
  * Semantic knowledge search (H7). Chunks get a vector from the workspace's embedding model; searches blend
@@ -26,16 +27,28 @@ export async function indexKnowledge(db: Db, gateway: LLMGateway, workspaceId: s
   const key = modelKey(model);
   const stale = and(
     eq(chunks.workspaceId, workspaceId),
-    or(isNull(chunks.embeddingModel), ne(chunks.embeddingModel, key)),
+    or(isNull(chunks.embeddingModel), and(ne(chunks.embeddingModel, key), ne(chunks.embeddingModel, `${key}#failed`))),
   );
   const pending = await db.select({ id: chunks.id, content: chunks.content }).from(chunks).where(stale).limit(limit);
   if (pending.length) {
-    const vectors = await gateway.embed(
-      model,
-      pending.map((c) => c.content),
-    );
+    let vectors: (number[] | null)[];
+    try {
+      vectors = await gateway.embed(
+        model,
+        pending.map((c) => c.content),
+      );
+    } catch {
+      // One bad passage (e.g. too long) shouldn't stall the whole batch: embed one by one and mark failures,
+      // which are skipped until the embedding model changes.
+      vectors = [];
+      for (const c of pending) vectors.push((await gateway.embed(model, [c.content]).catch(() => [null]))[0] ?? null);
+    }
     for (let i = 0; i < pending.length; i++) {
-      await db.update(chunks).set({ embedding: vectors[i]!, embeddingModel: key }).where(eq(chunks.id, pending[i]!.id));
+      const v = vectors[i];
+      await db
+        .update(chunks)
+        .set(v ? { embedding: v, embeddingModel: key } : { embedding: null, embeddingModel: `${key}#failed` })
+        .where(eq(chunks.id, pending[i]!.id));
     }
   }
   const [left] = await db
@@ -89,7 +102,7 @@ export async function searchKnowledge(
     eq(chunks.workspaceId, workspaceId),
     opts.sources.length ? inArray(documents.sourceId, opts.sources) : undefined,
   );
-  const tsq = sql`to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', ${query})), ' | '))`;
+  const tsq = orQuery(query);
   const textHits = await db
     .select({ id: chunks.id, text: chunks.content, title: documents.title, uri: documents.uri })
     .from(chunks)

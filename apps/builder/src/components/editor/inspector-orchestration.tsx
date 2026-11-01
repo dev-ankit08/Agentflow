@@ -157,7 +157,9 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
               disabled={readOnly}
               className="h-8 text-xs"
               value={node.config.maxSteps}
-              onChange={(e) => set({ maxSteps: Math.min(20, Math.max(1, Number(e.target.value) || 6)) })}
+              onChange={(e) =>
+                set({ maxSteps: Math.min(20, Math.max(1, e.target.value === "" ? 6 : Number(e.target.value))) })
+              }
             />
           </Row>
           <p className="rounded-lg bg-surface-2 p-2 text-[11px] text-muted">
@@ -285,7 +287,11 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
                 disabled={readOnly}
                 className="h-8 text-xs"
                 value={node.config.maxIterations}
-                onChange={(e) => set({ maxIterations: Math.min(500, Math.max(1, Number(e.target.value) || 20)) })}
+                onChange={(e) =>
+                  set({
+                    maxIterations: Math.min(500, Math.max(1, e.target.value === "" ? 20 : Number(e.target.value))),
+                  })
+                }
               />
             </Row>
           </div>
@@ -337,7 +343,12 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
                 disabled={readOnly}
                 className="h-8 text-xs"
                 value={node.config.minutes ?? 0}
-                onChange={(e) => onChange({ ...node, config: { minutes: Math.max(0, Number(e.target.value) || 0) } })}
+                onChange={(e) =>
+                  onChange({
+                    ...node,
+                    config: { minutes: Math.max(0, e.target.value === "" ? 0 : Number(e.target.value)) },
+                  })
+                }
               />
             </Row>
           ) : (
@@ -392,7 +403,9 @@ export function OrchestrationFields({ node, onChange, suggestions, configuredPro
                   disabled={readOnly}
                   className="h-8 text-xs"
                   value={node.config.topK}
-                  onChange={(e) => set({ topK: Math.min(20, Math.max(1, Number(e.target.value) || 5)) })}
+                  onChange={(e) =>
+                    set({ topK: Math.min(20, Math.max(1, e.target.value === "" ? 5 : Number(e.target.value))) })
+                  }
                 />
               </Row>
               <p className="rounded-lg bg-surface-2 p-2 text-[11px] text-muted">
@@ -466,7 +479,19 @@ export function TriggersPanel({
   const list = triggers ?? [];
   const schedule = list.find((t) => t.type === "schedule");
   const cron = String(schedule?.config?.cron ?? "");
-  const [inputText, setInputText] = useState(() => JSON.stringify(schedule?.config?.input ?? {}, null, 0));
+  const storedInput = JSON.stringify(schedule?.config?.input ?? {}, null, 0);
+  const [inputText, setInputText] = useState(storedInput);
+  const [inputError, setInputError] = useState<string | null>(null);
+  // Undo or a collaborator can change the stored input; show it unless the box holds an unfinished edit of it.
+  useEffect(() => {
+    setInputText((t) => {
+      try {
+        return JSON.stringify(JSON.parse(t || "{}")) === storedInput ? t : storedInput;
+      } catch {
+        return t;
+      }
+    });
+  }, [storedInput]);
   const [hook, setHook] = useState<WebhookInfo | null>(null);
   const [emailUrl, setEmailUrl] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
@@ -590,7 +615,7 @@ export function TriggersPanel({
                 </Select>
               </div>
             </Row>
-            <Row label="Trigger input (JSON)" hint="Available as {{trigger.*}} in scheduled runs.">
+            <Row label="Trigger input (JSON)" hint={inputError ?? "Available as {{trigger.*}} in scheduled runs."}>
               <Input
                 value={inputText}
                 disabled={readOnly}
@@ -599,9 +624,12 @@ export function TriggersPanel({
                   setInputText(e.target.value);
                   try {
                     const input = JSON.parse(e.target.value || "{}");
-                    if (input && typeof input === "object") setSchedule({ ...schedule.config, input });
+                    if (input && typeof input === "object" && !Array.isArray(input)) {
+                      setInputError(null);
+                      setSchedule({ ...schedule.config, input });
+                    } else setInputError('Use a JSON object, e.g. {"report": "daily"}');
                   } catch {
-                    /* keep typing */
+                    setInputError("Not valid JSON yet");
                   }
                 }}
               />
@@ -627,7 +655,7 @@ export function TriggersPanel({
               {hook.signature === "hubspot"
                 ? "Requests are checked with HubSpot's v3 signature."
                 : hook.signed
-                  ? "Sign requests with header x-agentflow-signature: sha256=<HMAC of body>."
+                  ? 'Send x-agentflow-timestamp (Unix seconds) and x-agentflow-signature: sha256=<HMAC of timestamp + "." + body>; requests older than 5 minutes are refused.'
                   : "Requests are not signed: keep the address private."}{" "}
               Add <code className="font-mono">?wait=true</code> to get the result back.
             </p>
@@ -736,6 +764,8 @@ export function NodeComments({
   canComment: boolean;
 }) {
   const [text, setText] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const mine = comments.filter((c) => c.nodeId === nodeId);
   return (
     <details className="rounded-lg border border-border p-2" open={mine.some((c) => !c.resolvedAt)}>
@@ -765,9 +795,17 @@ export function NodeComments({
             className="space-y-1"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!text.trim()) return;
-              await onAdd(nodeId, text.trim());
-              setText("");
+              if (!text.trim() || posting) return;
+              setPosting(true);
+              setError(null);
+              try {
+                await onAdd(nodeId, text.trim());
+                setText("");
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setPosting(false);
+              }
             }}
           >
             <textarea
@@ -778,9 +816,10 @@ export function NodeComments({
               onChange={(e) => setText(e.target.value)}
               className="w-full rounded-lg border border-border bg-surface px-2 py-1 text-xs text-text focus:border-accent focus:outline-none"
             />
-            <Button size="sm" type="submit" disabled={!text.trim()}>
-              Comment
+            <Button size="sm" type="submit" disabled={!text.trim() || posting}>
+              {posting ? "Posting…" : "Comment"}
             </Button>
+            {error && <p className="text-[11px] text-danger">{error}</p>}
           </form>
         )}
       </div>

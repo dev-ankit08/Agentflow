@@ -6,6 +6,42 @@ import { providers, type ModelRef } from "@agentflow/flow-schema";
 import { Button, Input, Label, Select, cn } from "@agentflow/ui";
 import { modelSuggestions, providerLabels } from "./model";
 
+/** A comma-separated list field that keeps what you type (commas, spaces) while updating the parsed list. */
+export function ListInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  className,
+}: {
+  value: string[];
+  onChange: (list: string[]) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const parse = (t: string) =>
+    t
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+  const [text, setText] = useState(value.join(", "));
+  // Follow outside changes (undo, a collaborator) without fighting the user's typing.
+  const shown = parse(text).join("\u0000") === value.join("\u0000") ? text : value.join(", ");
+  return (
+    <Input
+      value={shown}
+      placeholder={placeholder}
+      disabled={disabled}
+      className={className}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parse(e.target.value));
+      }}
+    />
+  );
+}
+
 export function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <div className="space-y-1">

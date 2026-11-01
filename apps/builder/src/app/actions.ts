@@ -233,10 +233,10 @@ export async function rollbackVersion(form: FormData) {
 export async function saveWidget(form: FormData) {
   const { current } = await requireWorkspace();
   const flowId = field(form, "flowId");
-  const lines = (name: string) =>
+  const lines = (name: string, stripSlash = false) =>
     field(form, name)
       .split(/\r?\n/)
-      .map((l) => l.trim().replace(/\/+$/, ""))
+      .map((l) => (stripSlash ? l.trim().replace(/\/+$/, "") : l.trim()))
       .filter(Boolean);
   await attempt(
     `/flows/${flowId}/deploy`,
@@ -248,7 +248,7 @@ export async function saveWidget(form: FormData) {
           title: field(form, "title"),
           welcome: field(form, "welcome"),
           color: field(form, "color"),
-          allowedOrigins: lines("allowedOrigins"),
+          allowedOrigins: lines("allowedOrigins", true),
           quickReplies: lines("quickReplies"),
         },
       }),

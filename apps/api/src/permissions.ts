@@ -30,6 +30,23 @@ export const permissionIds = Object.keys(PERMISSIONS) as Permission[];
 
 const rank: Record<Role, number> = { viewer: 1, reviewer: 2, builder: 3, admin: 4, owner: 5 };
 
+export const roleRank = (role: Role) => rank[role];
+
+/** Who may decide an approval: a custom role needs "inbox.decide"; otherwise the node's approver role applies. */
+export function canDecideApproval(
+  member: { role: Role; customRoleId?: string | null; customPermissions?: unknown },
+  approverRole: Role,
+) {
+  if (member.customRoleId) return ((member.customPermissions ?? []) as string[]).includes("inbox.decide");
+  return rank[member.role] >= rank[approverRole];
+}
+
+/** Whether a member (built-in or custom role) may edit flows, e.g. in live co-editing. */
+export function canEditFlows(member: { role: Role; customRoleId?: string | null; customPermissions?: unknown }) {
+  if (member.customRoleId) return ((member.customPermissions ?? []) as string[]).includes("flows.edit");
+  return rank[member.role] >= rank.builder;
+}
+
 /** The permissions a built-in role has. */
 export const presetPermissions = (role: Role): Permission[] =>
   permissionIds.filter((p) => rank[role] >= rank[PERMISSIONS[p].preset]);

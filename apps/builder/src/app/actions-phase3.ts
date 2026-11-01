@@ -219,7 +219,7 @@ export async function generateFlowFromDescription(form: FormData) {
       name: field(form, "name") || undefined,
     })) as { id: string; issues: unknown[] };
     id = res.id;
-    issues = res.issues.length;
+    issues = res.issues?.length ?? 0;
   });
   // Open the draft; the editor's issues panel lists anything the model couldn't get right.
   redirect(`/flows/${id}${issues ? "?generated=issues" : ""}`);

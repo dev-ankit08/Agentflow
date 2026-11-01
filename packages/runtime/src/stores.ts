@@ -119,5 +119,5 @@ export class DbRunStore implements RunStore {
 
 /** Drops everything a customer said or was told, keeping only what is needed for metrics. */
 export function scrubState(state: RunState): RunState {
-  return { ...state, conversation: [], nodeOutputs: {}, variables: {}, trigger: {}, user: {} };
+  return { ...state, conversation: [], nodeOutputs: {}, variables: {}, trigger: {}, user: {}, loops: {} };
 }

@@ -24,6 +24,8 @@ export type RunState = {
   paused?: { nodeId: string; reason: PauseReason; since: string; resumeAt?: string };
   /** Progress of Loop nodes that are currently iterating. */
   loops?: Record<string, { items: unknown[]; index: number; results: unknown[] }>;
+  /** Steps run inside Loop bodies this turn (they don't count toward maxSteps but have their own cap). */
+  loopSteps?: number;
   /** Nesting level for subflows (0 = top-level run). */
   depth?: number;
 };

@@ -158,11 +158,22 @@ describe.skipIf(!url)("Phase 3 API", () => {
     });
     expect(unsigned.statusCode).toBe(401);
 
-    const sig = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+    const post = (url: string, payload: string, headers: Record<string, string>) =>
+      app.inject({ method: "POST", url, headers: { "content-type": "application/json", ...headers }, payload });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = `sha256=${createHmac("sha256", secret).update(`${ts}.${body}`).digest("hex")}`;
+    // Signed but without the timestamp, or with a stale one: refused (no replays).
+    const noTs = await post(path, body, { "x-agentflow-signature": sig });
+    expect(noTs.statusCode).toBe(401);
+    const old = String(Math.floor(Date.now() / 1000) - 3600);
+    const staleSig = `sha256=${createHmac("sha256", secret).update(`${old}.${body}`).digest("hex")}`;
+    expect(
+      (await post(path, body, { "x-agentflow-timestamp": old, "x-agentflow-signature": staleSig })).statusCode,
+    ).toBe(401);
     const ok = await app.inject({
       method: "POST",
       url: `${path}?wait=true`,
-      headers: { "content-type": "application/json", "x-agentflow-signature": sig },
+      headers: { "content-type": "application/json", "x-agentflow-signature": sig, "x-agentflow-timestamp": ts },
       payload: body,
     });
     expect(ok.statusCode).toBe(200);
@@ -294,8 +305,11 @@ describe.skipIf(!url)("Phase 3 API", () => {
 
     expect(await resumeDueTimers(db, app.deps.executor)).toBe(0);
     expect(await resumeDueTimers(db, app.deps.executor, new Date(Date.now() + 1441 * 60_000))).toBe(1);
+    // Resuming happens in the background.
+    await expect
+      .poll(async () => (await db.select().from(runs).where(eq(runs.id, runId)))[0]?.status)
+      .toBe("waiting_input");
     const [done] = await db.select().from(runs).where(eq(runs.id, runId));
-    expect(done?.status).toBe("waiting_input");
     expect(JSON.stringify(done?.state)).toContain("Following up!");
   });
 
@@ -588,6 +602,10 @@ describe.skipIf(!url)("Phase 3 API", () => {
     const reworded = await ask("Today, opening hours?");
     expect(reworded.model).toBe("cache (openai_compatible/mock-1)");
     expect((await ask("Do you ship abroad?")).model).toBe("openai_compatible/mock-1");
+    // Near-identical questions about different orders never share an answer.
+    expect((await ask("Where is order 12?")).model).toBe("openai_compatible/mock-1");
+    expect((await ask("Where is order 13?")).model).toBe("openai_compatible/mock-1");
+    expect((await ask("Where is order 12?")).model).toBe("cache (openai_compatible/mock-1)");
 
     const stats = (await call(owner.id, "GET", "/v1/workspace/settings")).json().cache;
     expect(stats.hits).toBeGreaterThanOrEqual(2);
@@ -683,6 +701,80 @@ describe.skipIf(!url)("Phase 3 API", () => {
       ["Support lead", 0],
     ]);
     await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "builder" });
+  });
+
+  it("doesn't let custom roles or member managers grant more than they hold", async () => {
+    // Owner-only permissions can't go into a custom role at all.
+    const billing = await call(owner.id, "POST", "/v1/roles", {
+      name: "Billing",
+      baseRole: "viewer",
+      permissions: ["billing.manage"],
+    });
+    expect(billing.statusCode).toBe(400);
+
+    // A member manager (viewer base) can't make anyone admin, nor hand out permissions they lack.
+    const manager = (
+      await call(owner.id, "POST", "/v1/roles", {
+        name: "Member manager",
+        baseRole: "viewer",
+        permissions: ["members.manage"],
+      })
+    ).json();
+    const auditor = (
+      await call(owner.id, "POST", "/v1/roles", { name: "Auditor", baseRole: "viewer", permissions: ["audit.view"] })
+    ).json();
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: manager.id });
+    expect((await call(builder.id, "PATCH", `/v1/members/${builder.id}`, { role: "admin" })).statusCode).toBe(403);
+    expect((await call(builder.id, "POST", "/v1/invites", { email: "x@example.com", role: "admin" })).statusCode).toBe(
+      403,
+    );
+    expect(
+      (await call(builder.id, "PATCH", `/v1/members/${builder.id}`, { customRoleId: auditor.id })).statusCode,
+    ).toBe(403);
+    expect((await call(builder.id, "PATCH", `/v1/members/${owner.id}`, { role: "viewer" })).statusCode).toBe(403);
+    // Owner-only routes need a real owner, even with a custom role that maps to them.
+    expect((await call(builder.id, "POST", "/v1/billing/portal")).statusCode).toBe(403);
+
+    await call(owner.id, "PATCH", `/v1/members/${builder.id}`, { role: "builder" });
+    await call(owner.id, "DELETE", `/v1/roles/${manager.id}`);
+    await call(owner.id, "DELETE", `/v1/roles/${auditor.id}`);
+  });
+
+  it("answers bad input with 400s and keeps erased ids out of the audit log", async () => {
+    expect((await call(owner.id, "GET", "/v1/audit?limit=-5")).statusCode).toBe(200);
+    expect((await call(owner.id, "GET", "/v1/audit?before=not-a-date")).statusCode).toBe(400);
+    const flowId = await makeFlow("Inbound null", ...echoFlow("Hi"));
+    await publish(flowId);
+    const email = (await call(owner.id, "POST", `/v1/flows/${flowId}/email-hook`)).json();
+    const res = await app.inject({
+      method: "POST",
+      url: new URL(email.url).pathname,
+      headers: { "content-type": "application/json" },
+      payload: "null",
+    });
+    expect(res.statusCode).toBe(400);
+
+    await call(owner.id, "DELETE", `/v1/end-users/secret_customer_${run}`);
+    const events = (await call(owner.id, "GET", "/v1/audit")).json().events;
+    const erasure = events.find((e: { action: string }) => e.action === "Deleted end-user data");
+    expect(erasure).toBeTruthy();
+    expect(JSON.stringify(erasure)).not.toContain(`secret_customer_${run}`);
+  });
+
+  it("fires a schedule once even when sweeps overlap", async () => {
+    const [nodes, edges] = echoFlow("Overlap");
+    const flowId = await makeFlow("Overlap", nodes, edges, {
+      triggers: [{ type: "schedule", config: { cron: "45 3 * * *" } }],
+    });
+    await publish(flowId);
+    const minute = new Date("2026-11-02T03:45:05Z");
+    const [a, b] = await Promise.all([
+      runSchedules(db, app.deps.executor, minute),
+      runSchedules(db, app.deps.executor, minute),
+    ]);
+    const fired = await db.select().from(runs).where(eq(runs.flowId, flowId));
+    expect(fired).toHaveLength(1);
+    expect([...a, ...b].filter((id) => id === fired[0]!.id)).toHaveLength(1);
   });
 
   it("maps every protected write route to a permission", () => {
@@ -847,11 +939,18 @@ describe.skipIf(!url)("Phase 3 API", () => {
     const runId = /"runId":"(run_[^"]+)"/.exec(res.body)![1]!;
     const steps = await app.deps.store.load(runId);
     expect(steps?.status).toBe("waiting_input");
-    // Idle chats are scrubbed by the retention sweep.
+    // A chat that started long ago but is still active is left alone; once idle for an hour it is scrubbed.
     await db
       .update(runs)
       .set({ startedAt: new Date(Date.now() - 2 * 3_600_000) })
       .where(eq(runs.id, runId));
+    await applyRetention(db);
+    const [active] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(JSON.stringify(active?.state)).toContain("4111");
+    await db
+      .update(runSteps)
+      .set({ endedAt: new Date(Date.now() - 2 * 3_600_000) })
+      .where(eq(runSteps.runId, runId));
     const swept = await applyRetention(db);
     expect(swept.scrubbed).toBeGreaterThanOrEqual(1);
     const [scrubbed] = await db.select().from(runs).where(eq(runs.id, runId));
