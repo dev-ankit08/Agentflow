@@ -34,6 +34,7 @@ import { applyRetention, extractMemories, resumeDueTimers, runSchedules } from "
 import { indexKnowledge } from "./semantic";
 import { automationRoutes, hookRoutes } from "./routes/automation-routes";
 import { auditHook, governanceRoutes } from "./routes/governance";
+import { promptRoutes } from "./routes/prompts";
 
 function widgetScriptPath(): string | null {
   let dir = process.cwd();
@@ -281,6 +282,7 @@ export async function buildApp(opts: AppOptions) {
       await v1.register((s) => channelRoutes(s, deps));
       await v1.register((s) => billingRoutes(s, deps));
       await v1.register((s) => governanceRoutes(s, deps));
+      await v1.register((s) => promptRoutes(s, deps));
       await v1.register((s) => automationRoutes(s, deps));
       await v1.register((s) => hookRoutes(s, deps));
       await v1.register((s) => approvalLinkRoutes(s, { ...deps, jwtSecret: opts.jwtSecret }));

@@ -131,3 +131,21 @@ export async function importEvalCases(form: FormData) {
   });
   redirect(`/flows/${flowId}/evals?ok=${encodeURIComponent(summary)}`);
 }
+
+export async function savePrompt(form: FormData) {
+  const id = field(form, "id");
+  const body = {
+    name: field(form, "name"),
+    description: field(form, "description") || undefined,
+    body: String(form.get("body") ?? ""),
+  };
+  await attempt(
+    "/prompts",
+    () => (id ? call(`/v1/prompts/${id}`, "PUT", body) : call("/v1/prompts", "POST", body)),
+    id ? "Prompt saved" : "Prompt added to the library",
+  );
+}
+
+export async function deletePrompt(form: FormData) {
+  await attempt("/prompts", () => call(`/v1/prompts/${field(form, "id")}`, "DELETE"), "Prompt deleted");
+}

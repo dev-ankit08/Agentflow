@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@agentflow/db": "workspace:*",
+    "@agentflow/expression-engine": "workspace:^",
     "@agentflow/flow-schema": "workspace:*",
     "@agentflow/llm-gateway": "workspace:*",
     "@agentflow/mcp-client": "workspace:*",

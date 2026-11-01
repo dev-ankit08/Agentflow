@@ -174,8 +174,18 @@ Estimates are rough engineering days for this codebase.
    - `GET /v1/evals/:id/cases.csv` exports the same columns.
    - `GET /v1/analytics?format=csv` exports per-day ROI; `&table=flows` exports per-flow totals.
    - The UI has an import form and a download link on each dataset, and "Export CSV: by day · by flow" on Analytics.
-9. **Prompt library and prompt diff (P-1).** Save and reuse prompts per workspace, and show a side-by-side diff between
-   versions (the version diff page already exists).
+9. **Prompt library and prompt diff (P-1) — done** on branch `e2e-and-leftovers`.
+   - Library: the `prompts` table (migration 0009) and `/v1/prompts` CRUD in `apps/api/src/routes/prompts.ts`. It
+     rejects secrets and broken `{{#if}}` blocks, and changes are audited.
+   - UI: a Prompts page (nav) and a "Use from library / Save to library" picker under the agent's system prompt
+     (`components/editor/prompt-library.tsx`). Agents copy the text; they don't link to it.
+   - Diff: the version page shows a side-by-side line diff of every prompt-like field (agent, supervisor, parallel,
+     end/handoff replies, approval messages) using `lineDiff` and `promptChanges` in
+     `apps/builder/src/lib/diff.ts`. "Compare with: vN" picks any other version.
+   - **Still open:**
+     - The picker exists only on the Agent node's system prompt.
+     - Linked prompts that update everywhere when edited.
+     - Unit tests for `lineDiff`; the builder has no unit-test runner yet, so it was verified in the browser.
 10. **Shopify (PL-1, rest).** Build a theme app extension that injects the widget script and passes the customer
     identity (signed by an app proxy).
 

@@ -44,6 +44,9 @@ importers:
       '@agentflow/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@agentflow/expression-engine':
+        specifier: workspace:^
+        version: link:../../packages/expression-engine
       '@agentflow/flow-schema':
         specifier: workspace:*
         version: link:../../packages/flow-schema

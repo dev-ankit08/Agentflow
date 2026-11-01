@@ -503,6 +503,32 @@ describe.skipIf(!url)("Phase 3 API", () => {
     expect(byFlow.body.split("\n")[0]).toBe("flow,conversations,automated,escalated,automation_rate");
   });
 
+  it("keeps a workspace prompt library", async () => {
+    const created = await call(builder.id, "POST", "/v1/prompts", {
+      name: "Friendly tone",
+      body: "Be warm and concise.{{#if user.name}} Greet {{user.name}}.{{/if}}",
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id;
+    expect(
+      (await call(builder.id, "POST", "/v1/prompts", { name: "Leaky", body: "Key {{secret.STRIPE}}" })).statusCode,
+    ).toBe(400);
+    expect((await call(builder.id, "POST", "/v1/prompts", { name: "Broken", body: "{{#if x}}open" })).statusCode).toBe(
+      400,
+    );
+
+    const edited = await call(builder.id, "PUT", `/v1/prompts/${id}`, {
+      name: "Friendly tone",
+      description: "Default support voice",
+      body: "Be warm.",
+    });
+    expect(edited.json()).toMatchObject({ body: "Be warm.", description: "Default support voice" });
+    const list = (await call(owner.id, "GET", "/v1/prompts")).json().prompts;
+    expect(list.map((p: { name: string }) => p.name)).toContain("Friendly tone");
+    expect((await call(builder.id, "DELETE", `/v1/prompts/${id}`)).statusCode).toBe(204);
+    expect((await call(builder.id, "PUT", `/v1/prompts/${id}`, { name: "x", body: "y" })).statusCode).toBe(404);
+  });
+
   it("records configuration changes in the audit log", async () => {
     await call(owner.id, "PUT", "/v1/workspace/settings", { retention: { days: 90 } });
     const log = (await call(owner.id, "GET", "/v1/audit")).json();

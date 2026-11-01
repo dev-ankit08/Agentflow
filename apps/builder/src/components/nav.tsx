@@ -10,6 +10,7 @@ export const navItems: NavItem[] = [
   { href: "/", label: "Home" },
   { href: "/flows", label: "Flows" },
   { href: "/templates", label: "Templates" },
+  { href: "/prompts", label: "Prompts" },
   { href: "/connectors", label: "Connectors" },
   { href: "/knowledge", label: "Knowledge" },
   { href: "/runs", label: "Runs & Traces" },

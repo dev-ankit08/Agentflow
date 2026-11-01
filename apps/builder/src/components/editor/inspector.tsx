@@ -7,6 +7,7 @@ import { FormulaField, ModelPicker, Row, SchemaBuilder, TemplateField } from "./
 import { ExtraFields, type FlowSummary, type SourceSummary } from "./inspector-extra";
 import { NodeComments, OrchestrationFields, TriggersPanel, type FlowComment } from "./inspector-orchestration";
 import { nodeMeta, type ConnectorSummary } from "./model";
+import { PromptLibrary } from "./prompt-library";
 
 type Props = {
   node: NodeDef;
@@ -114,6 +115,11 @@ export function Inspector({
               disabled={readOnly}
               suggestions={suggestions}
               onChange={(systemPrompt) => set<typeof node>((n) => ({ ...n, config: { ...n.config, systemPrompt } }))}
+            />
+            <PromptLibrary
+              value={node.config.systemPrompt}
+              disabled={readOnly}
+              onUse={(systemPrompt) => set<typeof node>((n) => ({ ...n, config: { ...n.config, systemPrompt } }))}
             />
           </Row>
           <Row label="User message">

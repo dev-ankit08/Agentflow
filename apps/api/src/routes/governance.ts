@@ -40,6 +40,9 @@ const AUDITED: Record<string, string> = {
   "PUT /v1/workspace/settings": "Changed workspace settings",
   "POST /v1/templates/:slug/install": "Installed template",
   "DELETE /v1/end-users/:id": "Deleted end-user data",
+  "POST /v1/prompts": "Added library prompt",
+  "PUT /v1/prompts/:id": "Edited library prompt",
+  "DELETE /v1/prompts/:id": "Deleted library prompt",
 };
 
 /** Records every successful configuration change once the response is sent. Bodies are never stored. */

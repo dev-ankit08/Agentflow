@@ -71,3 +71,25 @@ export const flowComments = pgTable(
   },
   (t) => [index("flow_comments_flow_idx").on(t.flowId)],
 );
+
+// --- Prompt library ---------------------------------------------------------------------------
+
+/** Reusable prompts shared across a workspace's agents. */
+export const prompts = pgTable(
+  "prompts",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => newId("prm")),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    body: text("body").notNull(),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("prompts_ws_idx").on(t.workspaceId)],
+);
